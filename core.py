@@ -27,9 +27,9 @@ if "GEMINI_API_KEY" not in os.environ:
         "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
     )
 
-dspy.settings.configure(
-    lm=dspy.LM("gemini/gemini-2.5-flash")
-)
+# Configure DSPy LM (สำคัญ: ต้องเรียก dspy.configure ไม่ใช่ dspy.settings.configure)
+lm = dspy.LM("gemini/gemini-2.5-flash")
+dspy.configure(lm=lm)
 
 DB_PATH = "iphone_gold.duckdb"
 
@@ -370,62 +370,4 @@ class InsightFromResult(dspy.Signature):
     Guideline:
     - kpi_summary: bullet สั้นๆ สรุปตัวเลขสำคัญ
     - explanation: อธิบายความหมายของตัวเลขต่อธุรกิจ (Demand–Sales–Stock)
-    - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโมชัน, โฟกัสสาขา ฯลฯ)
-    """
-
-    question: str    = InputField(desc="Original management question in Thai or English")
-    table_view: str  = InputField(desc="SQL result as a small markdown table")
-
-    kpi_summary: str = OutputField(desc="Short bullet list of key KPIs in Thai (B1)")
-    explanation: str = OutputField(desc="Insight explanation in Thai (B1)")
-    action: str      = OutputField(desc="1–3 recommended actions in Thai (B1)")
-
-
-insight_predictor = dspy.Predict(InsightFromResult)
-
-
-def generate_insight(question: str, table_view: str):
-    return insight_predictor(question=question, table_view=table_view)
-
-
-# ============================================
-# 5) MAIN ENTRY FOR APP: ask_bot_core
-# ============================================
-
-def ask_bot_core(question: str) -> dict:
-    """
-    ฟังก์ชัน core สำหรับใช้ใน Streamlit / API:
-    - รับคำถามผู้บริหาร (ภาษาไทย/อังกฤษ)
-    - ใช้ optimized_planner สร้าง SQL
-    - รัน SQL กับ DuckDB
-    - แปลงผลลัพธ์เป็น KPI + Explanation + Action
-    - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
-    """
-    plan = optimized_planner(question)
-    raw_sql = plan.sql
-    sql = clean_sql(raw_sql)
-
-    df, table_view = run_sql(sql)
-
-    if df.empty:
-        return {
-            "question": question,
-            "intent": getattr(plan, "intent", ""),
-            "sql": sql,
-            "table_view": table_view,
-            "kpi_summary": "",
-            "explanation": "ไม่มีข้อมูลในช่วง / เงื่อนไขนี้",
-            "action": "ลองปรับคำถาม หรือช่วงวันที่ใหม่อีกครั้ง",
-        }
-
-    ins = generate_insight(question=question, table_view=table_view)
-
-    return {
-        "question": question,
-        "intent": getattr(plan, "intent", ""),
-        "sql": sql,
-        "table_view": table_view,
-        "kpi_summary": ins.kpi_summary,
-        "explanation": ins.explanation,
-        "action": ins.action,
-    }
+    - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโม
