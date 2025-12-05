@@ -13,9 +13,19 @@ from dspy.teleprompt import BootstrapFewShot
 # 0) LLM / DSPy CONFIG
 # ============================================
 
-# GEMINI_API_KEY ควรถูกตั้งใน environment (เช่น Streamlit secrets → os.environ)
-# ตัวอย่าง (ห้ามเขียน key ลงไฟล์นี้ตรง ๆ เวลาใช้จริง):
-# os.environ["GEMINI_API_KEY"] = "YOUR_KEY"
+# Get API key from Streamlit secrets or environment
+try:
+    import streamlit as st
+    if "GEMINI_API_KEY" in st.secrets:
+        os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    pass  # Not running in Streamlit or secrets not available
+
+# Verify API key exists
+if "GEMINI_API_KEY" not in os.environ:
+    raise ValueError(
+        "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
+    )
 
 dspy.settings.configure(
     lm=dspy.LM("gemini/gemini-2.5-flash")
@@ -53,16 +63,19 @@ def run_sql(sql: str, db_path: str = DB_PATH):
     """
     รัน SQL กับ DuckDB แล้วคืน (DataFrame, markdown-table-string)
     """
-    con = duckdb.connect(db_path)
-    df = con.execute(sql).df()
-    con.close()
+    try:
+        con = duckdb.connect(db_path, read_only=True)
+        df = con.execute(sql).df()
+        con.close()
 
-    if df.empty:
-        table_view = "*(no rows)*"
-    else:
-        table_view = df.to_markdown(index=False)
+        if df.empty:
+            table_view = "*(no rows)*"
+        else:
+            table_view = df.to_markdown(index=False)
 
-    return df, table_view
+        return df, table_view
+    except Exception as e:
+        raise Exception(f"SQL Execution Error: {str(e)}\nSQL: {sql}")
 
 
 # ============================================
