@@ -38,8 +38,8 @@ def configure_api_key():
 def load_lm():
     configure_api_key()
 
-    # ใช้ Gemini 2.5 Flash ผ่าน litellm (รองรับแน่นอน)
-    lm = dspy.LM("google/gemini-2.5-flash")
+    # ใช้ Gemini 2.5 Flash ผ่าน litellm/DSPy
+    lm = dspy.LM("gemini/gemini-2.5-flash")
 
     dspy.configure(lm=lm)
     return lm
