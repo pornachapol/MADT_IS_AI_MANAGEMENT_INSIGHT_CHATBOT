@@ -35,10 +35,28 @@ def configure_api_key():
 
 
 def ensure_lm_configured():
-    """Ensure LM is configured before use - ALWAYS reconfigure to avoid DSPy state issues"""
+    """
+    Ensure LM is configured with thread-safe caching.
+    DSPy requires that settings only be changed by the thread that initially configured it,
+    so we use Streamlit's cache_resource to ensure single initialization.
+    """
     configure_api_key()
-    lm = dspy.LM("gemini/gemini-2.5-flash")
-    dspy.configure(lm=lm)
+    
+    try:
+        import streamlit as st
+        
+        @st.cache_resource
+        def _configure_lm():
+            lm = dspy.LM("gemini/gemini-2.5-flash")
+            dspy.configure(lm=lm)
+            return lm
+        
+        _configure_lm()
+        
+    except ImportError:
+        # Not running in Streamlit
+        lm = dspy.LM("gemini/gemini-2.5-flash")
+        dspy.configure(lm=lm)
 
 
 # ============================================
