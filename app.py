@@ -35,6 +35,9 @@ def cached_ask_bot(question: str):
     Cache bot responses for 1 hour
     - Same question = instant response
     - Reduces API calls significantly
+    
+    Note: LM configuration is handled by get_streamlit_planner()
+    which uses @st.cache_resource internally
     """
     return ask_bot_core(question)
 
@@ -150,7 +153,7 @@ else:
         - ✅ Template-based insights สำหรับคำถามยอดนิยม (ไม่ใช้ API)
         - ✅ Cache คำตอบ 1 ชั่วโมง (คำถามซ้ำ = ทันที)
         - ✅ Reuse database connection (ลด overhead)
-        - ✅ Optimized LLM model (Gemini 2.5 Flash Thinking)
+        - ✅ Optimized LLM model (Gemini 1.5 Flash)
         - ✅ Cached compiled program (ไม่ต้อง compile ทุกครั้ง)
         
         **ผลลัพธ์:**
