@@ -45,13 +45,25 @@ def ensure_lm_configured():
     try:
         import streamlit as st
         
-        @st.cache_resource
-        def _configure_lm():
+        # Use a more aggressive caching strategy
+        @st.cache_resource(show_spinner=False)
+        def _get_lm():
+            """Create and configure LM - cached across all sessions"""
             lm = dspy.LM("gemini/gemini-2.5-flash")
             dspy.configure(lm=lm)
             return lm
         
-        _configure_lm()
+        # Get the cached LM
+        lm = _get_lm()
+        
+        # Always ensure dspy.configure is called with the cached LM
+        # This handles cases where DSPy settings might get reset
+        try:
+            # Try to access current LM to see if it's configured
+            _ = dspy.settings.lm
+        except (AttributeError, AssertionError):
+            # If not configured, configure it
+            dspy.configure(lm=lm)
         
     except ImportError:
         # Not running in Streamlit
