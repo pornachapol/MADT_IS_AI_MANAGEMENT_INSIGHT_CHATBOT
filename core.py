@@ -45,9 +45,9 @@ def ensure_lm_configured():
     
     if not _lm_configured:
         configure_api_key()
-        # ใช้ Gemini 2.5 Flash Thinking สำหรับ performance ที่ดีขึ้น
+        # ใช้ Gemini 1.5 Flash (stable, free tier)
         lm = dspy.LM(
-            "gemini/gemini-2.5-flash",
+            "gemini/gemini-1.5-flash",
             temperature=0.0  # Deterministic สำหรับ SQL
         )
         dspy.configure(lm=lm)
@@ -191,31 +191,15 @@ _optimized_planner = None
 
 def get_optimized_planner():
     """
-    Lazy initialization with file-based caching
-    ถ้ามีไฟล์ optimized_planner.json ใน repo ก็โหลดมาใช้เลย
-    ไม่ต้อง compile ใหม่
+    Lazy initialization - ใช้ ChainOfThought โดยตรง
+    ไม่ต้อง compile (เหมาะสำหรับ online deployment)
     """
     global _optimized_planner
     
     if _optimized_planner is None:
         ensure_lm_configured()
-        
-        # Try to load from cache file
-        if os.path.exists(COMPILED_PROGRAM_PATH):
-            try:
-                print(f"📦 Loading cached planner from {COMPILED_PROGRAM_PATH}")
-                planner = SQLPlanner()
-                planner.load(COMPILED_PROGRAM_PATH)
-                _optimized_planner = planner
-                print("✅ Cached planner loaded successfully")
-            except Exception as e:
-                print(f"⚠️ Failed to load cached planner: {e}")
-                print("🔄 Will use basic ChainOfThought instead")
-                _optimized_planner = SQLPlanner()
-        else:
-            print("ℹ️ No cached planner found, using basic ChainOfThought")
-            print(f"💡 To speed up: Run compile_planner.py locally and commit {COMPILED_PROGRAM_PATH}")
-            _optimized_planner = SQLPlanner()
+        print("ℹ️ Using ChainOfThought planner (no compilation needed)")
+        _optimized_planner = SQLPlanner()
     
     return _optimized_planner
 
@@ -274,91 +258,157 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
     template = INSIGHT_TEMPLATES[intent]
     
     try:
-        if intent == "best_selling_model_mtd":
+        if intent in ["best_selling_model_mtd", "Best selling model"]:
             if df.empty:
                 return None
             top_row = df.iloc[0]
+            # Find generation column (flexible matching)
+            gen_cols = [c for c in df.columns if 'gen' in c.lower() or 'model' in c.lower()]
+            units_cols = [c for c in df.columns if 'unit' in c.lower() or 'count' in c.lower()]
+            
+            if not gen_cols or not units_cols:
+                return None
+                
+            gen_col = gen_cols[0]
+            units_col = units_cols[0]
+            
             return {
                 "kpi_summary": template["kpi"].format(
-                    top_model=top_row.get("iphone_gen", "N/A"),
-                    top_units=top_row.get("mtd_units", 0)
+                    top_model=top_row[gen_col],
+                    top_units=int(top_row[units_col])
                 ),
                 "explanation": template["explanation"].format(
-                    top_model=top_row.get("iphone_gen", "N/A")
+                    top_model=top_row[gen_col]
                 ),
                 "action": template["action"].format(
-                    top_model=top_row.get("iphone_gen", "N/A")
+                    top_model=top_row[gen_col]
                 )
             }
         
-        elif intent == "best_branch_mtd":
+        elif intent in ["best_branch_mtd", "Best branch"]:
             if df.empty:
                 return None
             top_row = df.iloc[0]
+            # Flexible column matching
+            branch_cols = [c for c in df.columns if 'branch' in c.lower() and ('name' in c.lower() or 'code' in c.lower())]
+            units_cols = [c for c in df.columns if 'unit' in c.lower() or 'sold' in c.lower() or 'count' in c.lower()]
+            
+            if not branch_cols or not units_cols:
+                return None
+                
+            branch_col = branch_cols[0]
+            units_col = units_cols[0]
+            
             return {
                 "kpi_summary": template["kpi"].format(
-                    top_branch=top_row.get("branch_name", "N/A"),
-                    top_units=top_row.get("total_units_sold", 0)
+                    top_branch=top_row[branch_col],
+                    top_units=int(top_row[units_col])
                 ),
                 "explanation": template["explanation"].format(
-                    top_branch=top_row.get("branch_name", "N/A")
+                    top_branch=top_row[branch_col]
                 ),
                 "action": template["action"]
             }
         
-        elif intent == "branch_conversion_mtd":
+        elif intent in ["branch_conversion_mtd", "Conversion rate"]:
             if df.empty:
                 return None
-            avg_rate = df["conversion_rate"].mean() * 100
+            # Flexible column matching
+            rate_cols = [c for c in df.columns if 'conv' in c.lower() or 'rate' in c.lower()]
+            
+            if not rate_cols:
+                return None
+                
+            rate_col = rate_cols[0]
+            avg_rate = df[rate_col].mean() * 100
+            
             return {
                 "kpi_summary": template["kpi"].format(avg_rate=f"{avg_rate:.1f}"),
                 "explanation": template["explanation"],
                 "action": template["action"]
             }
         
-        elif intent == "lost_opportunity_by_branch_on_date":
+        elif intent in ["lost_opportunity_by_branch_on_date", "lost_opportunity", "Lost opportunity"]:
             if df.empty:
                 return None
             top_row = df.iloc[0]
+            # Flexible column matching
+            branch_cols = [c for c in df.columns if 'branch' in c.lower()]
+            lost_cols = [c for c in df.columns if 'lost' in c.lower() or 'opp' in c.lower()]
+            
+            if not branch_cols or not lost_cols:
+                return None
+                
+            branch_col = branch_cols[0]
+            lost_col = lost_cols[0]
+            
             return {
                 "kpi_summary": template["kpi"].format(
-                    top_branch=top_row.get("branch_name", "N/A"),
-                    lost_units=top_row.get("lost_opportunity", 0)
+                    top_branch=top_row[branch_col],
+                    lost_units=int(top_row[lost_col])
                 ),
                 "explanation": template["explanation"],
                 "action": template["action"]
             }
         
-        elif intent == "daily_sales_trend_mtd":
+        elif intent in ["daily_sales_trend_mtd", "Daily sales"]:
             if df.empty:
                 return None
-            avg_daily = df["total_units_sold"].mean()
+            # Flexible column matching
+            units_cols = [c for c in df.columns if 'unit' in c.lower() or 'sold' in c.lower() or 'count' in c.lower()]
+            
+            if not units_cols:
+                return None
+                
+            units_col = units_cols[0]
+            avg_daily = df[units_col].mean()
+            
             return {
                 "kpi_summary": template["kpi"].format(avg_daily=f"{avg_daily:.1f}"),
                 "explanation": template["explanation"],
                 "action": template["action"]
             }
         
-        elif intent == "demand_by_generation_mtd":
+        elif intent in ["demand_by_generation_mtd", "Demand by generation"]:
             if df.empty:
                 return None
             top_row = df.iloc[0]
+            # Flexible column matching
+            gen_cols = [c for c in df.columns if 'gen' in c.lower() or 'model' in c.lower()]
+            
+            if not gen_cols:
+                return None
+                
+            gen_col = gen_cols[0]
+            
             return {
                 "kpi_summary": template["kpi"].format(
-                    top_gen=top_row.get("iphone_gen", "N/A")
+                    top_gen=top_row[gen_col]
                 ),
                 "explanation": template["explanation"],
                 "action": template["action"]
             }
         
-        elif intent == "monthly_revenue_vs_prev_month":
+        elif intent in ["monthly_revenue_vs_prev_month", "Monthly revenue comparison"]:
             if df.empty:
                 return None
             row = df.iloc[0]
+            # Flexible column matching
+            rev_cols = [c for c in df.columns if 'rev' in c.lower() and 'current' in c.lower()]
+            growth_cols = [c for c in df.columns if 'growth' in c.lower() or 'pct' in c.lower()]
+            
+            if not rev_cols:
+                return None
+                
+            rev_col = rev_cols[0]
+            growth_col = growth_cols[0] if growth_cols else None
+            
+            growth_val = row[growth_col] if growth_col else 0
+            
             return {
                 "kpi_summary": template["kpi"].format(
-                    current_rev=row.get("current_revenue", 0),
-                    growth=row.get("growth_pct", 0)
+                    current_rev=row[rev_col],
+                    growth=growth_val
                 ),
                 "explanation": template["explanation"],
                 "action": template["action"]
