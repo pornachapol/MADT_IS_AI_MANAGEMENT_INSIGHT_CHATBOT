@@ -75,7 +75,7 @@ def init_database(db_path: str = "iphone_gold.duckdb", force_recreate: bool = Fa
         print("📊 Table summary:")
         tables = con.execute("SHOW TABLES").fetchall()
         for table in tables:
-            table_name = table[0]
+            table_name = tables[0]
             count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
             print(f"  - {table_name}: {count} rows")
         
@@ -93,36 +93,3 @@ def init_database(db_path: str = "iphone_gold.duckdb", force_recreate: bool = Fa
 if __name__ == "__main__":
     # Run standalone
     init_database(force_recreate=False)
-
-
-4. **กด "Commit changes"**
-
----
-
-### ขั้นที่ 3: สร้างไฟล์ `.gitignore`
-
-**`.gitignore` คืออะไร?**
-- เป็นไฟล์ที่บอก Git ว่า**ไฟล์ไหนไม่ต้อง upload** ขึ้น GitHub
-- ใช้กับไฟล์ที่ไม่จำเป็น เช่น `.duckdb` (จะสร้างใหม่ทุกครั้งอยู่แล้ว)
-
-1. **ใน GitHub repository** กดปุ่ม **"Add file" -> "Create new file"**
-2. **ตั้งชื่อไฟล์:** `.gitignore` (ต้องมีจุดข้างหน้า)
-3. **Copy code นี้ใส่:**
-
-# Python
-__pycache__/
-*.py[cod]
-*.pyc
-
-# DuckDB (will be created from CSVs)
-*.duckdb
-*.duckdb.wal
-
-# Streamlit secrets
-.streamlit/secrets.toml
-
-# Environment
-.env
-
-# OS files
-.DS_Store
