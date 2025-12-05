@@ -122,11 +122,11 @@ class IntentAndSQL(dspy.Signature):
       fact_contract(date_key, branch_id, product_id, contract_count)
       fact_inventory_snapshot(date_key, branch_id, product_id, stock_qty)
       dim_date(date_key, date, year, month, day)
-      dim_product(product_id, model_name, generation, storage_gb, color, list_price)
+      dim_product(product_id, model_name, generation, storage_gb, color, base_price)
       dim_branch(branch_id, branch_code, branch_name, region)
 
     - วันที่: date_key = INT YYYYMMDD
-    - Revenue = SUM(c.contract_count * p.list_price) ถ้าถามยอดขายเป็นเงิน
+    - Revenue = SUM(c.contract_count * p.base_price) ถ้าถามยอดขายเป็นเงิน
     """
     question: str = InputField()
     intent: str = OutputField()
@@ -327,7 +327,7 @@ ex9 = dspy.Example(
             SELECT
                 d.year,
                 d.month,
-                SUM(c.contract_count * p.list_price) AS total_revenue
+                SUM(c.contract_count * p.base_price) AS total_revenue
             FROM fact_contract c
             JOIN dim_date d    ON c.date_key   = d.date_key
             JOIN dim_product p ON c.product_id = p.product_id
