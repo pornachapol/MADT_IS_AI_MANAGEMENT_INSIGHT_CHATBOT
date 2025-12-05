@@ -1,6 +1,6 @@
 # core.py
 # Core logic for iPhone Gold Datamart Insight Chatbot
-# FULL VERSION (9 Examples + Auto-Discovery Model)
+# CLEAN VERSION – ใช้แค่ DSPy + Gemini 1.5 Flash
 
 import os
 import re
@@ -10,175 +10,143 @@ import dspy
 from dspy import InputField, OutputField
 from dspy.teleprompt import BootstrapFewShot
 
-# 🔥 FIX: Import ไลบรารีของ Google โดยตรงกันเหนียว
-try:
-    import google.generativeai as genai
-except ImportError:
-    genai = None
-
 # ============================================
 # 0) CONFIG & CONSTANTS
 # ============================================
 
 DB_PATH = "iphone_gold.duckdb"
 
+
 # ============================================
-# 1) LLM CONFIG (AUTO-DISCOVERY MODE)
+# 1) LLM CONFIG (DSPy + GEMINI)
 # ============================================
 
-def load_lm():
-    """
-    Load LM with Auto-Failover.
-    ระบบจะลองเชื่อมต่อ Model ทีละตัว จนกว่าจะเจอตัวที่ใช้งานได้ (แก้ปัญหา 404)
-    """
-    # 1. Setup Keys
+def configure_api_key():
+    """ดึง GEMINI_API_KEY จาก Streamlit secrets หรือ env แล้วตั้งค่า env ให้พร้อมใช้"""
     try:
         import streamlit as st
         if "GEMINI_API_KEY" in st.secrets:
-            api_key = st.secrets["GEMINI_API_KEY"]
-            os.environ["GEMINI_API_KEY"] = api_key
-            os.environ["GOOGLE_API_KEY"] = api_key
+            os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
     except Exception:
+        # ไม่ได้รันผ่าน Streamlit หรือไม่มี secrets
         pass
 
-    if "GOOGLE_API_KEY" not in os.environ and "GEMINI_API_KEY" not in os.environ:
-         raise ValueError("ไม่พบ API Key! กรุณาตรวจสอบ .streamlit/secrets.toml")
+    if "GEMINI_API_KEY" not in os.environ:
+        raise ValueError("GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables.")
 
-    # 2. 🔥 รายชื่อ Model ที่จะไล่ลอง (กันเหนียว 404)
-    candidate_models = [
-        "gemini/gemini-1.5-flash-latest", # ลองตัวล่าสุด
-        "gemini/gemini-1.5-flash-001",    # ลองตัว version เจาะจง
-        "gemini/gemini-1.5-flash",        # ลองตัว alias ปกติ
-        "gemini/gemini-1.5-pro-latest",   # ลองตัว Pro
-        "gemini/gemini-pro"               # ไม้ตายสุดท้าย
-    ]
 
-    lm = None
-    print("🔄 Connecting to Gemini (Auto-Discovery Mode)...")
+def load_lm():
+    configure_api_key()
 
-    for model in candidate_models:
-        try:
-            print(f"   👉 Testing: {model} ...")
-            # ลองสร้าง Object
-            temp_lm = dspy.LM(model)
-            # ลองยิง Test Request 1 ครั้ง
-            dspy.configure(lm=temp_lm)
-            dspy.Predict("test_in -> test_out")(test_in="ping")
-            
-            # ถ้าผ่าน แสดงว่าใช้ได้
-            print(f"   ✅ CONNECTED! Using: {model}")
-            lm = temp_lm
-            break
-        except Exception as e:
-            print(f"   ❌ Failed ({model}): {str(e)}")
-            continue
-
-    if lm is None:
-        # ถ้าหาไม่เจอเลย ให้ใช้ท่าไม้ตายสุดท้าย (Native Client)
-        print("⚠️ All litellm attempts failed. Switching to Native Google Client...")
-        lm = dspy.Google(model="gemini-1.5-flash", api_key=os.environ["GOOGLE_API_KEY"])
+    # ใช้ Gemini 2.5 Flash ผ่าน litellm (รองรับแน่นอน)
+    lm = dspy.LM("google/gemini-2.5-flash")
 
     dspy.configure(lm=lm)
     return lm
 
-# Load Global LM
+
+# โหลด LM ตอน import module
 GLOBAL_LM = load_lm()
 
 
-# Initialize database
+# ============================================
+# 2) INITIALIZE DUCKDB
+# ============================================
+
 def ensure_database_exists():
-    """Ensure DuckDB database exists, create from CSV if needed"""
+    """Ensure DuckDB database exists"""
     if not os.path.exists(DB_PATH):
         print(f"📦 Creating database at {DB_PATH}...")
-        try:
-            from init_db import init_database
-            init_database(DB_PATH)
-        except ImportError:
-            print("⚠️ Error: init_db.py not found.")
+        from init_db import init_database
+        init_database(DB_PATH)
     else:
         try:
             con = duckdb.connect(DB_PATH, read_only=True)
             con.execute("SELECT 1").fetchone()
             con.close()
         except Exception:
-            if os.path.exists(DB_PATH): os.remove(DB_PATH)
+            if os.path.exists(DB_PATH):
+                os.remove(DB_PATH)
             from init_db import init_database
             init_database(DB_PATH)
+
 
 ensure_database_exists()
 
 
 # ============================================
-# 2) HELPER FUNCTIONS
+# 3) HELPER FUNCTIONS
 # ============================================
 
 def clean_sql(sql: str) -> str:
-    """
-    ลบ code fence พวก ``` หรือ ```duckdb ออกจาก SQL ที่ LLM ส่งมา
-    """
-    if not isinstance(sql, str): return sql
+    """ลบ ``` หรือ ```duckdb ออกจาก SQL ที่ LLM ส่งมา"""
+    if not isinstance(sql, str):
+        return sql
+
     s = sql.strip()
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z0-9_]*\n?", "", s)
-        if s.endswith("```"): s = s[:-3]
+        if s.endswith("```"):
+            s = s[:-3]
     return s.strip()
 
+
 def run_sql(sql: str, db_path: str = DB_PATH):
-    """
-    รัน SQL กับ DuckDB แล้วคืน (DataFrame, markdown-table-string)
-    """
+    """รัน SQL กับ DuckDB แล้วคืน (DataFrame, markdown-table-string)"""
     try:
         con = duckdb.connect(db_path, read_only=True)
         df = con.execute(sql).df()
         con.close()
-        return df, (df.to_markdown(index=False) if not df.empty else "*(no rows)*")
+
+        if df.empty:
+            table_view = "*(no rows)*"
+        else:
+            table_view = df.to_markdown(index=False)
+
+        return df, table_view
     except Exception as e:
         raise Exception(f"SQL Error: {str(e)}\nSQL: {sql}")
 
 
 # ============================================
-# 3) DSPy SIGNATURES & MODULES
+# 4) DSPy SIGNATURES & MODULES
 # ============================================
 
 class IntentAndSQL(dspy.Signature):
     """
     Convert a top-management business question into DuckDB SQL using the iPhone Gold Datamart.
 
-    YOU MUST OBEY THESE RULES STRICTLY:
+    Rules:
+    - ใช้เฉพาะตาราง:
+      fact_registration(date_key, branch_id, product_id, reg_count)
+      fact_contract(date_key, branch_id, product_id, contract_count)
+      fact_inventory_snapshot(date_key, branch_id, product_id, stock_qty)
+      dim_date(date_key, date, year, month, day)
+      dim_product(product_id, model_name, generation, storage_gb, color, list_price)
+      dim_branch(branch_id, branch_code, branch_name, region)
 
-    1) Allowed tables and columns (use ONLY these, nothing else):
-       fact_registration(date_key, branch_id, product_id, reg_count)
-       fact_contract(date_key, branch_id, product_id, contract_count)
-       fact_inventory_snapshot(date_key, branch_id, product_id, stock_qty)
-       dim_date(date_key, date, year, month, day)
-       dim_product(product_id, model_name, generation, storage_gb, color, list_price)
-       dim_branch(branch_id, branch_code, branch_name, region)
-
-    2) You MUST NOT invent any new tables or columns.
-    3) Joins must use correct keys.
-    4) Dates: date_key is INT in YYYYMMDD.
-    5) Revenue vs Units:
-       - Revenue: SUM(contract_count * list_price)
-       - Units: SUM(contract_count)
+    - วันที่: date_key = INT YYYYMMDD
+    - Revenue = SUM(c.contract_count * p.list_price) ถ้าถามยอดขายเป็นเงิน
     """
-    question: str = InputField(desc="Top-management analytics question")
-    intent: str = OutputField(desc="Short intent name")
-    sql: str = OutputField(desc="Valid DuckDB SQL")
-    comment: str = OutputField(desc="Short explanation")
+    question: str = InputField()
+    intent: str = OutputField()
+    sql: str = OutputField()
+    comment: str = OutputField()
+
 
 class SQLPlanner(dspy.Module):
     def __init__(self):
         super().__init__()
         self.predict = dspy.ChainOfThought(IntentAndSQL)
+
     def forward(self, question: str):
         return self.predict(question=question)
 
 
 # ============================================
-# 4) TRAINSET (FULL 9 EXAMPLES - NO CUTS)
+# 5) TRAINSET (9 EXAMPLES)
 # ============================================
 
-# 1) Best-selling iPhone generation in Nov (MTD)
 ex1 = dspy.Example(
     question="เดือน 11 ปี 2025 รุ่น iPhone ไหนขายดีที่สุด (ตามจำนวนเครื่อง)?",
     intent="best_selling_model_mtd",
@@ -194,10 +162,9 @@ ex1 = dspy.Example(
         GROUP BY p.generation
         ORDER BY mtd_units DESC;
     """,
-    comment="Calculate total units sold per iPhone generation in Nov 2025 and rank from highest to lowest."
+    comment="Rank iPhone generation by units sold in Nov 2025."
 ).with_inputs("question")
 
-# 2) Best branch by units sold in Nov
 ex2 = dspy.Example(
     question="ในเดือนพฤศจิกายน 2025 สาขาไหนมียอดขายเครื่องมากที่สุด?",
     intent="best_branch_mtd",
@@ -214,10 +181,9 @@ ex2 = dspy.Example(
         GROUP BY b.branch_code, b.branch_name
         ORDER BY total_units_sold DESC;
     """,
-    comment="Sum contract_count by branch for Nov 2025 and sort branches by total units sold."
+    comment="Rank branches by units sold in Nov 2025."
 ).with_inputs("question")
 
-# 3) Conversion rate per branch (Reg → Contract, Nov 2025)
 ex3 = dspy.Example(
     question="ช่วยดู Conversion Rate ของแต่ละสาขาในเดือน 11 ปี 2025 ให้หน่อย",
     intent="branch_conversion_mtd",
@@ -236,17 +202,16 @@ ex3 = dspy.Example(
         JOIN dim_date d   ON r.date_key   = d.date_key
         LEFT JOIN fact_contract c
           ON r.date_key   = c.date_key
-          AND r.branch_id  = c.branch_id
-          AND r.product_id = c.product_id
+         AND r.branch_id  = c.branch_id
+         AND r.product_id = c.product_id
         WHERE d.year = 2025
           AND d.month = 11
         GROUP BY b.branch_code, b.branch_name
         ORDER BY conversion_rate DESC NULLS LAST;
     """,
-    comment="Compare total registrations vs contracts per branch in Nov 2025 to compute conversion rate."
+    comment="Compare total registrations vs contracts per branch in Nov 2025."
 ).with_inputs("question")
 
-# 4) Lost opportunity by branch on 2025-11-11
 ex4 = dspy.Example(
     question="วันที่ 11/11/2025 สาขาไหนเสียโอกาสขาย (Demand > Stock) สูงที่สุด?",
     intent="lost_opportunity_by_branch_on_date",
@@ -260,18 +225,17 @@ ex4 = dspy.Example(
         FROM fact_registration r
         JOIN fact_inventory_snapshot i
           ON r.date_key   = i.date_key
-          AND r.branch_id  = i.branch_id
-          AND r.product_id = i.product_id
+         AND r.branch_id  = i.branch_id
+         AND r.product_id = i.product_id
         JOIN dim_branch b ON r.branch_id = b.branch_id
         WHERE r.date_key = 20251111
         GROUP BY b.branch_code, b.branch_name
         HAVING SUM(r.reg_count) > SUM(i.stock_qty)
         ORDER BY lost_opportunity DESC;
     """,
-    comment="For 2025-11-11, find branches where demand exceeds stock and rank by lost opportunity."
+    comment="Find branches with demand > stock on 2025-11-11."
 ).with_inputs("question")
 
-# 5) Hot SKU with low stock on 2025-11-11
 ex5 = dspy.Example(
     question="วันที่ 11/11/2025 มี SKU ไหนที่ขายดีแต่สต็อกคงเหลือน้อยกว่าเท่ากับ 5 เครื่องบ้าง?",
     intent="hot_sku_low_stock_on_date",
@@ -289,8 +253,8 @@ ex5 = dspy.Example(
         FROM fact_contract c
         JOIN fact_inventory_snapshot i
           ON c.date_key   = i.date_key
-          AND c.branch_id  = i.branch_id
-          AND c.product_id = i.product_id
+         AND c.branch_id  = i.branch_id
+         AND c.product_id = i.product_id
         JOIN dim_branch b  ON c.branch_id  = b.branch_id
         JOIN dim_product p ON c.product_id = p.product_id
         WHERE c.date_key = 20251111
@@ -306,10 +270,9 @@ ex5 = dspy.Example(
            AND SUM(i.stock_qty) <= 5
         ORDER BY stock_remaining ASC, units_sold_today DESC;
     """,
-    comment="On 2025-11-11, identify SKUs that sold at least 1 unit and have remaining stock ≤ 5."
+    comment="Hot SKUs with remaining stock <= 5 on 2025-11-11."
 ).with_inputs("question")
 
-# 6) Daily sales trend for Nov 2025
 ex6 = dspy.Example(
     question="ขอดูยอดขายต่อวันในเดือนพฤศจิกายน 2025 รวมทุกสาขาให้หน่อย",
     intent="daily_sales_trend_mtd",
@@ -324,10 +287,9 @@ ex6 = dspy.Example(
         GROUP BY d.date
         ORDER BY d.date;
     """,
-    comment="Show total units sold per day in November 2025 across all branches."
+    comment="Daily units sold in Nov 2025."
 ).with_inputs("question")
 
-# 7) Demand by generation (registration) in Nov 2025
 ex7 = dspy.Example(
     question="เดือน 11 ปี 2025 ลูกค้าสนใจ iPhone แต่ละรุ่น (จาก Registration) เท่าไหร่?",
     intent="demand_by_generation_mtd",
@@ -343,10 +305,9 @@ ex7 = dspy.Example(
         GROUP BY p.generation
         ORDER BY total_reg DESC;
     """,
-    comment="Count total registrations by iPhone generation for November 2025."
+    comment="Registrations by iPhone generation in Nov 2025."
 ).with_inputs("question")
 
-# 8) Stock depth for iPhone 17 256GB on 2025-11-11
 ex8 = dspy.Example(
     question="วันที่ 11/11/2025 สาขาไหนมีสต็อก iPhone 17 256GB รวมกันมากที่สุด?",
     intent="stock_depth_specific_model_on_date",
@@ -364,10 +325,9 @@ ex8 = dspy.Example(
         GROUP BY b.branch_code, b.branch_name
         ORDER BY total_stock DESC;
     """,
-    comment="For 2025-11-11, compute stock quantity of iPhone 17 256GB per branch and rank by stock depth."
+    comment="Stock depth of iPhone 17 256GB by branch on 2025-11-11."
 ).with_inputs("question")
 
-# 9) Monthly revenue vs previous month (money)
 ex9 = dspy.Example(
     question="เดือน 11 ปี 2025 เทียบกับเดือน 10 ปี 2025 ยอดขายเป็นเงินรวมเป็นยังไง?",
     intent="monthly_revenue_vs_prev_month",
@@ -401,88 +361,64 @@ ex9 = dspy.Example(
         FROM monthly_revenue cur
         LEFT JOIN monthly_revenue prev
           ON cur.year  = prev.year
-          AND cur.month = 11
-          AND prev.month = 10;
+         AND cur.month = 11
+         AND prev.month = 10;
     """,
-    comment="Compare November 2025 revenue vs October 2025 by multiplying contract_count * list_price and computing difference and growth percentage."
+    comment="Compare revenue of Nov vs Oct 2025."
 ).with_inputs("question")
 
 trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
 
-
-teleprompter = BootstrapFewShot(metric=lambda x, y, trace=None: 0.0)
+teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
 optimized_planner = teleprompter.compile(SQLPlanner(), trainset=trainset)
 
+
 # ============================================
-# 5) INSIGHT LAYER
+# 6) INSIGHT LAYER
 # ============================================
 
 class InsightFromResult(dspy.Signature):
-    """
-    Turn a SQL result table into management insight and actions in Thai (B1 level).
-    """
-    question: str = InputField(desc="Original management question in Thai or English")
-    table_view: str = InputField(desc="SQL result as a small markdown table")
-    kpi_summary: str = OutputField(desc="Short bullet list of key KPIs in Thai (B1)")
-    explanation: str = OutputField(desc="Insight explanation in Thai (B1)")
-    action: str = OutputField(desc="1–3 recommended actions in Thai (B1)")
+    """Turn a SQL result table into management insight and actions in Thai (B1)."""
+    question: str = InputField()
+    table_view: str = InputField()
+    kpi_summary: str = OutputField()
+    explanation: str = OutputField()
+    action: str = OutputField()
+
 
 insight_predictor = dspy.Predict(InsightFromResult)
+
+
 def generate_insight(question: str, table_view: str):
     return insight_predictor(question=question, table_view=table_view)
 
 
 # ============================================
-# 6) MAIN ENTRY FOR APP (CRASH PROOF)
+# 7) MAIN ENTRY FOR APP
 # ============================================
 
 def ask_bot_core(question: str) -> dict:
-    # 1. ย้ำ Config (แก้ปัญหา Streamlit Thread)
+    # ย้ำ config LM เผื่อ Streamlit reload แปลก ๆ
     dspy.configure(lm=GLOBAL_LM)
 
-    # 2. Plan SQL (ใส่ Try Catch ป้องกัน Error NoneType/JSON)
-    try:
-        plan = optimized_planner(question)
-    except Exception as e:
-        error_msg = str(e)
-        # กรณี API ส่งค่าว่างกลับมา (ที่ทำให้เกิด JSON Error)
-        return {
-            "question": question, "intent": "error", "sql": "", "table_view": "",
-            "kpi_summary": "Connection Error", 
-            "explanation": f"ระบบ AI ขัดข้องชั่วคราว: {error_msg}",
-            "action": "กรุณาลองกดถามใหม่อีกครั้ง"
-        }
-
+    plan = optimized_planner(question)
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
-    # 3. Run SQL
-    try:
-        df, table_view = run_sql(sql)
-    except Exception as e:
-         return {
-            "question": question, "intent": getattr(plan, "intent", "sql_error"), "sql": sql,
-            "table_view": "Error", "kpi_summary": "SQL Error", 
-            "explanation": f"SQL ผิดพลาด: {str(e)}", "action": "ลองถามใหม่ด้วยคำพูดที่ชัดเจนขึ้น"
-        }
+    df, table_view = run_sql(sql)
 
-    # 4. Handle Empty
     if df.empty:
         return {
-            "question": question, "intent": getattr(plan, "intent", ""), "sql": sql, "table_view": table_view,
-            "kpi_summary": "", "explanation": "ไม่พบข้อมูลในเงื่อนไขนี้", "action": "ลองปรับช่วงเวลาหรือเงื่อนไข"
+            "question": question,
+            "intent": getattr(plan, "intent", ""),
+            "sql": sql,
+            "table_view": table_view,
+            "kpi_summary": "",
+            "explanation": "ไม่พบข้อมูลในเงื่อนไขนี้",
+            "action": "ลองเปลี่ยนเดือน / ปี หรือเงื่อนไขดูอีกครั้ง",
         }
 
-    # 5. Insight
-    try:
-        ins = generate_insight(question=question, table_view=table_view)
-    except Exception:
-        # Fallback Insight
-        class Dummy:
-             kpi_summary="สรุปข้อมูลตามตาราง"
-             explanation="แสดงข้อมูลตามที่ร้องขอ"
-             action="-"
-        ins = Dummy()
+    ins = generate_insight(question=question, table_view=table_view)
 
     return {
         "question": question,
