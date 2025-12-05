@@ -1,5 +1,5 @@
 # init_db.py
-# Initialize DuckDB database from CSV files
+# Initialize DuckDB database from CSV files (Robust version)
 
 import duckdb
 import pandas as pd
@@ -64,18 +64,51 @@ def init_database(db_path: str = "iphone_gold.duckdb", force_recreate: bool = Fa
     try:
         # Load each CSV and create table
         for table_name, csv_file in csv_files.items():
-            print(f"  📥 Loading {csv_file} -> {table_name}...")
-            df = pd.read_csv(csv_file)
-            con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
-            row_count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
-            print(f"    ✓ Loaded {row_count} rows")
+            print(f"  📥 Loading {csv_file} → {table_name}...")
+            
+            try:
+                # Read CSV with pandas (more robust for problematic CSVs)
+                df = pd.read_csv(
+                    csv_file,
+                    encoding='utf-8',
+                    on_bad_lines='skip',  # Skip bad lines
+                    engine='python'       # More forgiving parser
+                )
+                
+                # Clean column names (remove spaces, special chars)
+                df.columns = df.columns.str.strip()
+                
+                # Remove any duplicate rows
+                df = df.drop_duplicates()
+                
+                # Create table from dataframe
+                con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
+                
+                row_count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                print(f"    ✓ Loaded {row_count} rows")
+                
+            except Exception as e:
+                print(f"    ❌ Error loading {csv_file}: {str(e)}")
+                # Try with different encoding
+                print(f"    🔄 Retrying with latin1 encoding...")
+                df = pd.read_csv(
+                    csv_file,
+                    encoding='latin1',
+                    on_bad_lines='skip',
+                    engine='python'
+                )
+                df.columns = df.columns.str.strip()
+                df = df.drop_duplicates()
+                con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
+                row_count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
+                print(f"    ✓ Loaded {row_count} rows (with latin1)")
         
         # Verify all tables
         print("\n✅ Database created successfully!")
         print("📊 Table summary:")
         tables = con.execute("SHOW TABLES").fetchall()
         for table in tables:
-            table_name = tables[0]
+            table_name = table[0]
             count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
             print(f"  - {table_name}: {count} rows")
         
