@@ -22,6 +22,10 @@ except Exception as e:
     st.info("Make sure all dependencies are installed correctly.")
     st.stop()
 
+# Initialize session state for tracking if we've set up LM
+if 'lm_initialized' not in st.session_state:
+    st.session_state.lm_initialized = False
+
 question = st.text_input(
     "พิมพ์คำถามผู้บริหาร",
     placeholder="เช่น เดือนนี้เราเสียโอกาสการขายไปเท่าไหร่แล้ว? หรือ เดือน 11 ปี 2025 รุ่นไหนขายดีที่สุด?",
@@ -31,6 +35,9 @@ if st.button("🔍 วิเคราะห์เลย", type="primary") and qu
     with st.spinner("กำลังวาง SQL และสร้าง Insight..."):
         try:
             result = ask_bot_core(question)
+            
+            # Mark that LM has been initialized successfully
+            st.session_state.lm_initialized = True
 
             st.subheader("🎯 Intent ที่ระบบตีความ")
             st.write(result.get("intent", "(none)"))
