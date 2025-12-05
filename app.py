@@ -26,18 +26,13 @@ except Exception as e:
 
 
 # ============================================
-# CACHING WRAPPER
+# NO CACHING (ปิดไว้ก่อนเพื่อแก้ปัญหา LM)
 # ============================================
 
-@st.cache_data(ttl=3600, show_spinner=False)
 def cached_ask_bot(question: str):
     """
-    Cache bot responses for 1 hour
-    - Same question = instant response
-    - Reduces API calls significantly
-    
-    Note: LM configuration is handled by get_streamlit_planner()
-    which uses @st.cache_resource internally
+    Direct call - no caching for now
+    จะเพิ่ม caching กลับมาทีหลังหลังแก้ปัญหา LM แล้ว
     """
     return ask_bot_core(question)
 
