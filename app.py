@@ -26,6 +26,19 @@ except Exception as e:
 if 'lm_initialized' not in st.session_state:
     st.session_state.lm_initialized = False
 
+# Add a reset button in sidebar for troubleshooting
+with st.sidebar:
+    st.markdown("### 🔧 Troubleshooting")
+    if st.button("🔄 Reset Cache", help="Clear all caches if you encounter errors"):
+        st.cache_resource.clear()
+        st.session_state.clear()
+        st.success("Cache cleared! Refresh the page.")
+        st.stop()
+    
+    st.markdown("---")
+    st.markdown("**Status:**")
+    st.markdown(f"- LM Initialized: {'✅' if st.session_state.lm_initialized else '❌'}")
+
 question = st.text_input(
     "พิมพ์คำถามผู้บริหาร",
     placeholder="เช่น เดือนนี้เราเสียโอกาสการขายไปเท่าไหร่แล้ว? หรือ เดือน 11 ปี 2025 รุ่นไหนขายดีที่สุด?",
@@ -57,6 +70,23 @@ if st.button("🔍 วิเคราะห์เลย", type="primary") and qu
             st.subheader("🚀 Suggested Actions")
             st.write(result.get("action", ""))
 
+        except AssertionError as e:
+            if "No LM is loaded" in str(e):
+                st.error("⚠️ **LM Configuration Error**")
+                st.warning("กรุณากด **🔄 Reset Cache** ในแถบด้านซ้าย แล้วลองอีกครั้ง")
+                with st.expander("🔍 Technical Details"):
+                    st.code(f"Error: {str(e)}")
+                    st.markdown("""
+                    **วิธีแก้:**
+                    1. กดปุ่ม "🔄 Reset Cache" ในแถบด้านซ้าย
+                    2. Refresh หน้าเว็บ (F5)
+                    3. ลองถามคำถามอีกครั้ง
+                    
+                    ถ้ายังไม่หาย: Redeploy แอพใน Streamlit Cloud
+                    """)
+            else:
+                raise
+                
         except Exception as e:
             st.error(f"⚠️ **An error occurred:**\n\n{str(e)}")
             with st.expander("🔍 Debug Information"):
