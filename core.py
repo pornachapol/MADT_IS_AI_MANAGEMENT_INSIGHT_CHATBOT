@@ -131,7 +131,6 @@ class IntentAndSQL(dspy.Signature):
     question: str = InputField()
     intent: str = OutputField()
     sql: str = OutputField()
-    comment: str = OutputField()
 
 
 class SQLPlanner(dspy.Module):
@@ -161,8 +160,7 @@ ex1 = dspy.Example(
           AND d.month = 11
         GROUP BY p.generation
         ORDER BY mtd_units DESC;
-    """,
-    comment="Rank iPhone generation by units sold in Nov 2025."
+    """
 ).with_inputs("question")
 
 ex2 = dspy.Example(
@@ -180,8 +178,7 @@ ex2 = dspy.Example(
           AND d.month = 11
         GROUP BY b.branch_code, b.branch_name
         ORDER BY total_units_sold DESC;
-    """,
-    comment="Rank branches by units sold in Nov 2025."
+    """
 ).with_inputs("question")
 
 ex3 = dspy.Example(
@@ -208,8 +205,7 @@ ex3 = dspy.Example(
           AND d.month = 11
         GROUP BY b.branch_code, b.branch_name
         ORDER BY conversion_rate DESC NULLS LAST;
-    """,
-    comment="Compare total registrations vs contracts per branch in Nov 2025."
+    """
 ).with_inputs("question")
 
 ex4 = dspy.Example(
@@ -232,8 +228,7 @@ ex4 = dspy.Example(
         GROUP BY b.branch_code, b.branch_name
         HAVING SUM(r.reg_count) > SUM(i.stock_qty)
         ORDER BY lost_opportunity DESC;
-    """,
-    comment="Find branches with demand > stock on 2025-11-11."
+    """
 ).with_inputs("question")
 
 ex5 = dspy.Example(
@@ -269,8 +264,7 @@ ex5 = dspy.Example(
         HAVING SUM(c.contract_count) > 0
            AND SUM(i.stock_qty) <= 5
         ORDER BY stock_remaining ASC, units_sold_today DESC;
-    """,
-    comment="Hot SKUs with remaining stock <= 5 on 2025-11-11."
+    """
 ).with_inputs("question")
 
 ex6 = dspy.Example(
@@ -286,8 +280,7 @@ ex6 = dspy.Example(
           AND d.month = 11
         GROUP BY d.date
         ORDER BY d.date;
-    """,
-    comment="Daily units sold in Nov 2025."
+    """
 ).with_inputs("question")
 
 ex7 = dspy.Example(
@@ -304,8 +297,7 @@ ex7 = dspy.Example(
           AND d.month = 11
         GROUP BY p.generation
         ORDER BY total_reg DESC;
-    """,
-    comment="Registrations by iPhone generation in Nov 2025."
+    """
 ).with_inputs("question")
 
 ex8 = dspy.Example(
@@ -324,8 +316,7 @@ ex8 = dspy.Example(
           AND p.storage_gb = 256
         GROUP BY b.branch_code, b.branch_name
         ORDER BY total_stock DESC;
-    """,
-    comment="Stock depth of iPhone 17 256GB by branch on 2025-11-11."
+    """
 ).with_inputs("question")
 
 ex9 = dspy.Example(
@@ -363,8 +354,7 @@ ex9 = dspy.Example(
           ON cur.year  = prev.year
          AND cur.month = 11
          AND prev.month = 10;
-    """,
-    comment="Compare revenue of Nov vs Oct 2025."
+    """
 ).with_inputs("question")
 
 trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
@@ -401,12 +391,38 @@ def ask_bot_core(question: str) -> dict:
     # ย้ำ config LM เผื่อ Streamlit reload แปลก ๆ
     dspy.configure(lm=GLOBAL_LM)
 
-    plan = optimized_planner(question)
-    raw_sql = plan.sql
+    # 1) ให้ DSPy วางแผน Intent + SQL แบบกัน error
+    try:
+        plan = optimized_planner(question)
+    except Exception as e:
+        return {
+            "question": question,
+            "intent": "planner_error",
+            "sql": "",
+            "table_view": "",
+            "kpi_summary": "",
+            "explanation": f"มีปัญหาที่ชั้นวางแผน SQL: {e}",
+            "action": "ลองถามใหม่อีกครั้ง หรือปรับคำถามให้ชัดขึ้น",
+        }
+
+    raw_sql = getattr(plan, "sql", "")
     sql = clean_sql(raw_sql)
 
-    df, table_view = run_sql(sql)
+    # 2) รัน SQL
+    try:
+        df, table_view = run_sql(sql)
+    except Exception as e:
+        return {
+            "question": question,
+            "intent": getattr(plan, "intent", ""),
+            "sql": sql,
+            "table_view": "",
+            "kpi_summary": "",
+            "explanation": f"SQL ผิดพลาด: {e}",
+            "action": "ลองปรับคำถามใหม่ หรือเช็ก schema ของ datamart",
+        }
 
+    # 3) ถ้าไม่มีข้อมูลเลย
     if df.empty:
         return {
             "question": question,
@@ -418,14 +434,25 @@ def ask_bot_core(question: str) -> dict:
             "action": "ลองเปลี่ยนเดือน / ปี หรือเงื่อนไขดูอีกครั้ง",
         }
 
-    ins = generate_insight(question=question, table_view=table_view)
+    # 4) สร้าง Insight
+    try:
+        ins = generate_insight(question=question, table_view=table_view)
+        kpi_summary = ins.kpi_summary
+        explanation = ins.explanation
+        action = ins.action
+    except Exception:
+        # fallback ถ้า LLM สรุป insight พัง
+        kpi_summary = "สรุปจากตารางผลลัพธ์"
+        explanation = "ระบบสรุป Insight อัตโนมัติมีปัญหา แสดงผลดิบจาก SQL แทน"
+        action = "ลองถามใหม่ด้วยคำถามที่สั้นและตรงประเด็น"
 
     return {
         "question": question,
         "intent": getattr(plan, "intent", ""),
         "sql": sql,
         "table_view": table_view,
-        "kpi_summary": ins.kpi_summary,
-        "explanation": ins.explanation,
-        "action": ins.action,
+        "kpi_summary": kpi_summary,
+        "explanation": explanation,
+        "action": action,
     }
+
