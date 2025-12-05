@@ -17,30 +17,35 @@ from dspy.teleprompt import BootstrapFewShot
 DB_PATH = "iphone_gold.duckdb"
 
 def load_lm():
-    """Load LM exactly once and configure DSPy."""
-    
-    # 1. พยายามดึง Key จาก Streamlit Secrets
+    """
+    Load Gemini 1.5 Flash (Free Tier Recommended)
+    """
+    # 1. Setup API Keys
     try:
         import streamlit as st
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
             os.environ["GEMINI_API_KEY"] = api_key
-            # 🔥 Fix: ตั้งค่า GOOGLE_API_KEY ด้วย กัน Library สับสน
-            os.environ["GOOGLE_API_KEY"] = api_key
+            os.environ["GOOGLE_API_KEY"] = api_key # สำคัญมากสำหรับ litellm
     except Exception:
         pass
 
-    # 2. ตรวจสอบว่ามี Key หรือไม่
-    if "GEMINI_API_KEY" not in os.environ and "GOOGLE_API_KEY" not in os.environ:
-        raise ValueError(
-            "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
-        )
+    if "GOOGLE_API_KEY" not in os.environ:
+         raise ValueError("ไม่พบ API KEY ใน .streamlit/secrets.toml")
 
-    # 🔥 Fix: เปลี่ยนชื่อ Model เป็น 'gemini-2.5-flash' (รุ่นปัจจุบันที่เสถียร)
-    # อย่าใช้ 2.5 เพราะยังไม่มี
-    lm = dspy.LM("gemini/gemini-2.5-flash")
+    # 2. 🔥 เลือก Model: gemini-1.5-flash (ชัวร์สุดสำหรับ Free Tier)
+    # หมายเหตุ: dspy ใช้ prefix 'gemini/' เพื่อระบุ Provider
+    model_name = "gemini/gemini-1.5-flash"
     
-    # Configure global setting
+    print(f"🚀 Connecting to: {model_name}")
+
+    try:
+        lm = dspy.LM(model_name)
+    except Exception as e:
+        print(f"⚠️ Litellm Error: {e}")
+        # Fallback กรณีเครื่อง library เก่า
+        lm = dspy.Google(model="gemini-1.5-flash", api_key=os.environ["GOOGLE_API_KEY"])
+
     dspy.configure(lm=lm)
     return lm
 
