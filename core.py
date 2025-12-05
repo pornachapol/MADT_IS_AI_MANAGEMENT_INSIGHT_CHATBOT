@@ -132,6 +132,14 @@ class IntentAndSQL(dspy.Signature):
        - "เดือน X ปี Y"  => filter using dim_date.year = Y AND dim_date.month = X.
        - If year is not mentioned, assume the latest year in the data.
 
+    5) Revenue vs Units:
+       - If the question talks about "ยอดขายเป็นเงิน", "บาท", "revenue", "sales amount":
+         * Define revenue as: SUM(c.contract_count * p.list_price)
+         * Always JOIN dim_product p and use p.list_price.
+         * Name the column something like total_revenue or current_revenue.
+       - If the question talks about "จำนวนเครื่อง" or "ยอดขายกี่เครื่อง":
+         * Use SUM(c.contract_count) and name it total_units or similar.
+
     Your job:
        - Understand the question.
        - Propose a short intent name.
@@ -347,7 +355,47 @@ ex8 = dspy.Example(
     comment="For 2025-11-11, compute stock quantity of iPhone 17 256GB per branch and rank by stock depth."
 ).with_inputs("question")
 
-trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8]
+# 9) Monthly revenue vs previous month (money)
+ex9 = dspy.Example(
+    question="เดือน 11 ปี 2025 เทียบกับเดือน 10 ปี 2025 ยอดขายเป็นเงินรวมเป็นยังไง?",
+    intent="monthly_revenue_vs_prev_month",
+    sql="""
+        WITH monthly_revenue AS (
+            SELECT
+                d.year,
+                d.month,
+                SUM(c.contract_count * p.list_price) AS total_revenue
+            FROM fact_contract c
+            JOIN dim_date d    ON c.date_key   = d.date_key
+            JOIN dim_product p ON c.product_id = p.product_id
+            WHERE d.year = 2025
+              AND d.month IN (10, 11)
+            GROUP BY d.year, d.month
+        )
+        SELECT
+            cur.year,
+            cur.month           AS current_month,
+            cur.total_revenue   AS current_revenue,
+            prev.month          AS prev_month,
+            prev.total_revenue  AS prev_revenue,
+            cur.total_revenue - prev.total_revenue AS diff_revenue,
+            CASE
+                WHEN prev.total_revenue = 0 THEN NULL
+                ELSE ROUND(
+                    (cur.total_revenue - prev.total_revenue) * 100.0 / prev.total_revenue,
+                    2
+                )
+            END AS growth_pct
+        FROM monthly_revenue cur
+        LEFT JOIN monthly_revenue prev
+          ON cur.year  = prev.year
+         AND cur.month = 11
+         AND prev.month = 10;
+    """,
+    comment="Compare November 2025 revenue vs October 2025 by multiplying contract_count * list_price and computing difference and growth percentage."
+).with_inputs("question")
+
+trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
 
 
 def dummy_metric(example, prediction, trace=None):
