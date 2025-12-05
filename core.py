@@ -461,12 +461,44 @@ def ask_bot_core(question: str) -> dict:
     - แปลงผลลัพธ์เป็น KPI + Explanation + Action
     - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
     """
-    plan = optimized_planner(question)
+    
+    # 🔥 CRITICAL FIX: Re-configure DSPy for the current Streamlit thread
+    # Without this, Streamlit forgets the LM settings on interaction.
+    dspy.configure(lm=GLOBAL_LM)
+
+    # 1) ให้ DSPy วางแผน Intent + SQL
+    try:
+        plan = optimized_planner(question)
+    except Exception as e:
+        # Fallback if planner fails specifically due to LM issues
+        return {
+            "question": question,
+            "intent": "error",
+            "sql": "",
+            "table_view": "",
+            "kpi_summary": "Error generating plan",
+            "explanation": f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ AI: {str(e)}",
+            "action": "โปรดตรวจสอบ API Key หรือลองใหม่อีกครั้ง"
+        }
+
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
-    df, table_view = run_sql(sql)
+    # 2) รัน SQL กับ DuckDB
+    try:
+        df, table_view = run_sql(sql)
+    except Exception as e:
+         return {
+            "question": question,
+            "intent": getattr(plan, "intent", "sql_error"),
+            "sql": sql,
+            "table_view": "Error",
+            "kpi_summary": "",
+            "explanation": f"SQL Error: {str(e)}",
+            "action": "ระบบสร้าง SQL ไม่ถูกต้อง โปรดลองถามใหม่"
+        }
 
+    # 3) ถ้าไม่มีข้อมูล ให้ตอบแบบ graceful
     if df.empty:
         return {
             "question": question,
@@ -478,6 +510,8 @@ def ask_bot_core(question: str) -> dict:
             "action": "ลองปรับคำถาม หรือช่วงวันที่ใหม่อีกครั้ง",
         }
 
+    # 4) ให้ LLM สรุปอินไซต์จากตาราง
+    # Note: We don't need to re-configure here because we did it at the start of the function
     ins = generate_insight(question=question, table_view=table_view)
 
     return {
