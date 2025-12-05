@@ -28,10 +28,27 @@ if "GEMINI_API_KEY" not in os.environ:
     )
 
 # Configure DSPy LM (สำคัญ: ต้องเรียก dspy.configure ไม่ใช่ dspy.settings.configure)
-lm = dspy.LM("gemini/gemini-2.5-flash")
-dspy.configure(lm=lm)
+# Get API key from Streamlit secrets or environment
+try:
+    import streamlit as st
+    if "GEMINI_API_KEY" in st.secrets:
+        os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
+except Exception:
+    pass  # Running outside Streamlit or secrets unavailable
 
-DB_PATH = "iphone_gold.duckdb"
+# Verify API key exists
+if "GEMINI_API_KEY" not in os.environ:
+    raise ValueError("GEMINI_API_KEY not found. Please set it in Streamlit secrets.")
+
+# 🔥 MUST DO: Define LM once as global in module scope
+def load_lm():
+    """Load LM exactly once and return it (fix for Streamlit Cloud)."""
+    lm = dspy.LM("gemini/gemini-2.5-flash")
+    dspy.configure(lm=lm)
+    return lm
+
+# Load LM at import time (Streamlit reload-safe)
+GLOBAL_LM = load_lm()
 
 # Initialize database from CSV files if needed
 def ensure_database_exists():
