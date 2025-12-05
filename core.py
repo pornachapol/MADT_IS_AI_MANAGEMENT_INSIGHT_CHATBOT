@@ -386,7 +386,7 @@ ex10 = dspy.Example(
                 SUM(r.reg_count) AS total_demand,
                 SUM(COALESCE(i.stock_qty, 0)) AS current_stock,
                 SUM(r.reg_count) - SUM(COALESCE(i.stock_qty, 0)) AS lost_opportunity,
-                SUM(r.reg_count) - SUM(COALESCE(i.stock_qty, 0)) * AVG(p.base_price) AS lost_revenue_estimate
+                (SUM(r.reg_count) - SUM(COALESCE(i.stock_qty, 0))) * AVG(p.base_price) AS lost_revenue_estimate
             FROM fact_registration r
             JOIN dim_branch b ON r.branch_id = b.branch_id
             JOIN dim_product p ON r.product_id = p.product_id
