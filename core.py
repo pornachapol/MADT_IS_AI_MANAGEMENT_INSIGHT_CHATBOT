@@ -45,7 +45,7 @@ def ensure_lm_configured():
     
     if not _lm_configured:
         configure_api_key()
-        # ใช้ Gemini 1.5 Flash (stable, free tier)
+        # ใช้ Gemini 2.5 Flash (stable, free tier)
         lm = dspy.LM(
             "gemini/gemini-2.5-flash",
             temperature=0.0  # Deterministic สำหรับ SQL
@@ -252,13 +252,43 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
     Generate insight from template (no LLM call)
     Return None if template not available or data doesn't match expected format
     """
-    if intent not in INSIGHT_TEMPLATES:
+    # Normalize intent for matching
+    normalized_intent = intent.lower().replace(" ", "_").replace("-", "_")
+    
+    # Map various intent formats to template keys
+    intent_mapping = {
+        "best_selling_model": "best_selling_model_mtd",
+        "best_selling_model_mtd": "best_selling_model_mtd",
+        "best_branch": "best_branch_mtd",
+        "best_branch_mtd": "best_branch_mtd",
+        "conversion_rate": "branch_conversion_mtd",
+        "branch_conversion": "branch_conversion_mtd",
+        "branch_conversion_mtd": "branch_conversion_mtd",
+        "lost_opportunity": "lost_opportunity_by_branch_on_date",
+        "lost_opportunity_by_branch": "lost_opportunity_by_branch_on_date",
+        "lost_opportunity_by_branch_on_date": "lost_opportunity_by_branch_on_date",
+        "daily_sales": "daily_sales_trend_mtd",
+        "daily_sales_trend": "daily_sales_trend_mtd",
+        "daily_sales_trend_mtd": "daily_sales_trend_mtd",
+        "demand_by_generation": "demand_by_generation_mtd",
+        "demand_by_generation_mtd": "demand_by_generation_mtd",
+        "monthly_revenue": "monthly_revenue_vs_prev_month",
+        "monthly_revenue_comparison": "monthly_revenue_vs_prev_month",
+        "monthly_revenue_vs_prev_month": "monthly_revenue_vs_prev_month",
+    }
+    
+    # Get template key
+    template_key = intent_mapping.get(normalized_intent)
+    
+    if not template_key or template_key not in INSIGHT_TEMPLATES:
+        print(f"⚠️ No template for intent: {intent} (normalized: {normalized_intent})")
         return None
     
-    template = INSIGHT_TEMPLATES[intent]
+    template = INSIGHT_TEMPLATES[template_key]
     
     try:
-        if intent in ["best_selling_model_mtd", "Best selling model"]:
+        # Use template_key instead of intent
+        if template_key == "best_selling_model_mtd":
             if df.empty:
                 return None
             top_row = df.iloc[0]
@@ -285,7 +315,7 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
                 )
             }
         
-        elif intent in ["best_branch_mtd", "Best branch"]:
+        elif template_key == "best_branch_mtd":
             if df.empty:
                 return None
             top_row = df.iloc[0]
@@ -310,7 +340,7 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
                 "action": template["action"]
             }
         
-        elif intent in ["branch_conversion_mtd", "Conversion rate"]:
+        elif template_key == "branch_conversion_mtd":
             if df.empty:
                 return None
             # Flexible column matching
@@ -328,7 +358,7 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
                 "action": template["action"]
             }
         
-        elif intent in ["lost_opportunity_by_branch_on_date", "lost_opportunity", "Lost opportunity"]:
+        elif template_key == "lost_opportunity_by_branch_on_date":
             if df.empty:
                 return None
             top_row = df.iloc[0]
@@ -351,7 +381,7 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
                 "action": template["action"]
             }
         
-        elif intent in ["daily_sales_trend_mtd", "Daily sales"]:
+        elif template_key == "daily_sales_trend_mtd":
             if df.empty:
                 return None
             # Flexible column matching
@@ -369,7 +399,7 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
                 "action": template["action"]
             }
         
-        elif intent in ["demand_by_generation_mtd", "Demand by generation"]:
+        elif template_key == "demand_by_generation_mtd":
             if df.empty:
                 return None
             top_row = df.iloc[0]
@@ -389,7 +419,7 @@ def generate_template_insight(intent: str, df: pd.DataFrame) -> Optional[dict]:
                 "action": template["action"]
             }
         
-        elif intent in ["monthly_revenue_vs_prev_month", "Monthly revenue comparison"]:
+        elif template_key == "monthly_revenue_vs_prev_month":
             if df.empty:
                 return None
             row = df.iloc[0]
