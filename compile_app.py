@@ -218,7 +218,7 @@ if st.button("🔨 Compile Planner Now", type="primary"):
             progress = st.progress(0)
             st.write("⚙️ Step 1/4: Configuring DSPy...")
             lm = dspy.LM(
-                "gemini/gemini-2.5-flash-thinking-exp-01-21",
+                "gemini/gemini-2.0-flash-thinking-exp-1219",  # ← ใหม่
                 temperature=0.0
             )
             dspy.configure(lm=lm)
