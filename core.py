@@ -16,9 +16,6 @@ from dspy.teleprompt import BootstrapFewShot
 
 DB_PATH = "iphone_gold.duckdb"
 
-# Global variable to track if LM is configured
-_lm_configured = False
-
 # ============================================
 # 1) LLM CONFIG (DSPy + GEMINI)
 # ============================================
@@ -38,14 +35,10 @@ def configure_api_key():
 
 
 def ensure_lm_configured():
-    """Ensure LM is configured before use"""
-    global _lm_configured
-    
-    if not _lm_configured:
-        configure_api_key()
-        lm = dspy.LM("gemini/gemini-2.5-flash")
-        dspy.configure(lm=lm)
-        _lm_configured = True
+    """Ensure LM is configured before use - ALWAYS reconfigure to avoid DSPy state issues"""
+    configure_api_key()
+    lm = dspy.LM("gemini/gemini-2.5-flash")
+    dspy.configure(lm=lm)
 
 
 # ============================================
@@ -358,21 +351,29 @@ ex9 = dspy.Example(
 
 trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
 
-# Don't compile optimized_planner at module level
-# We'll do it lazily in ask_bot_core()
-_optimized_planner = None
-
 
 def get_optimized_planner():
-    """Lazy initialization of optimized planner"""
-    global _optimized_planner
+    """
+    Get optimized planner with proper caching using Streamlit.
+    This ensures the planner is compiled once and reused across requests.
+    """
+    ensure_lm_configured()
     
-    if _optimized_planner is None:
-        ensure_lm_configured()
+    # Try to use Streamlit's cache if available
+    try:
+        import streamlit as st
+        
+        @st.cache_resource
+        def _cached_compile():
+            teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
+            return teleprompter.compile(SQLPlanner(), trainset=trainset)
+        
+        return _cached_compile()
+        
+    except ImportError:
+        # Not running in Streamlit, use simple compilation
         teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
-        _optimized_planner = teleprompter.compile(SQLPlanner(), trainset=trainset)
-    
-    return _optimized_planner
+        return teleprompter.compile(SQLPlanner(), trainset=trainset)
 
 
 # ============================================
