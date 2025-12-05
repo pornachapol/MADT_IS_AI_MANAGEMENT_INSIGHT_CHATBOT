@@ -47,7 +47,7 @@ def ensure_lm_configured():
         
         @st.cache_resource
         def _configure_lm():
-            lm = dspy.LM("gemini/gemini-2.5-flash")
+            lm = dspy.LM("gemini/gemini-2.0-flash")
             dspy.configure(lm=lm)
             return lm
         
@@ -55,7 +55,7 @@ def ensure_lm_configured():
         
     except ImportError:
         # Not running in Streamlit
-        lm = dspy.LM("gemini/gemini-2.5-flash")
+        lm = dspy.LM("gemini/gemini-2.0-flash")
         dspy.configure(lm=lm)
 
 
