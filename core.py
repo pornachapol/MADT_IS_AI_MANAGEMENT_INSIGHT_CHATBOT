@@ -1,6 +1,6 @@
 # core.py
 # Core logic for iPhone Gold Datamart Insight Chatbot
-# CLEAN VERSION – ใช้แค่ DSPy + Gemini 1.5 Flash
+# FIXED VERSION – Proper DSPy LM configuration
 
 import os
 import re
@@ -16,6 +16,8 @@ from dspy.teleprompt import BootstrapFewShot
 
 DB_PATH = "iphone_gold.duckdb"
 
+# Global variable to track if LM is configured
+_lm_configured = False
 
 # ============================================
 # 1) LLM CONFIG (DSPy + GEMINI)
@@ -35,18 +37,15 @@ def configure_api_key():
         raise ValueError("GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables.")
 
 
-def load_lm():
-    configure_api_key()
-
-    # ใช้ Gemini 2.5 Flash ผ่าน litellm/DSPy
-    lm = dspy.LM("gemini/gemini-2.5-flash")
-
-    dspy.configure(lm=lm)
-    return lm
-
-
-# โหลด LM ตอน import module
-GLOBAL_LM = load_lm()
+def ensure_lm_configured():
+    """Ensure LM is configured before use"""
+    global _lm_configured
+    
+    if not _lm_configured:
+        configure_api_key()
+        lm = dspy.LM("gemini/gemini-2.5-flash")
+        dspy.configure(lm=lm)
+        _lm_configured = True
 
 
 # ============================================
@@ -359,8 +358,21 @@ ex9 = dspy.Example(
 
 trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
 
-teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
-optimized_planner = teleprompter.compile(SQLPlanner(), trainset=trainset)
+# Don't compile optimized_planner at module level
+# We'll do it lazily in ask_bot_core()
+_optimized_planner = None
+
+
+def get_optimized_planner():
+    """Lazy initialization of optimized planner"""
+    global _optimized_planner
+    
+    if _optimized_planner is None:
+        ensure_lm_configured()
+        teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
+        _optimized_planner = teleprompter.compile(SQLPlanner(), trainset=trainset)
+    
+    return _optimized_planner
 
 
 # ============================================
@@ -376,11 +388,15 @@ class InsightFromResult(dspy.Signature):
     action: str = OutputField()
 
 
-insight_predictor = dspy.Predict(InsightFromResult)
+def get_insight_predictor():
+    """Get insight predictor with LM configured"""
+    ensure_lm_configured()
+    return dspy.Predict(InsightFromResult)
 
 
 def generate_insight(question: str, table_view: str):
-    return insight_predictor(question=question, table_view=table_view)
+    predictor = get_insight_predictor()
+    return predictor(question=question, table_view=table_view)
 
 
 # ============================================
@@ -396,12 +412,15 @@ def ask_bot_core(question: str) -> dict:
     - แปลงผลลัพธ์เป็น KPI + Explanation + Action
     - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
     """
-
-    # ❌ ห้าม configure ซ้ำในอีก thread
-    # dspy.configure(lm=GLOBAL_LM)
+    
+    # Ensure LM is configured
+    ensure_lm_configured()
+    
+    # Get the optimized planner (lazy init)
+    planner = get_optimized_planner()
 
     # 1) ให้ DSPy วางแผน Intent + SQL
-    plan = optimized_planner(question)
+    plan = planner(question)
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
@@ -432,4 +451,3 @@ def ask_bot_core(question: str) -> dict:
         "explanation": ins.explanation,
         "action": ins.action,
     }
-
