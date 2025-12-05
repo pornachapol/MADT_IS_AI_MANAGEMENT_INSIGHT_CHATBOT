@@ -10,6 +10,12 @@ import dspy
 from dspy import InputField, OutputField
 from dspy.teleprompt import BootstrapFewShot
 
+# 🔥 FIX: Import ไลบรารีของ Google โดยตรงกันเหนียว
+try:
+    import google.generativeai as genai
+except ImportError:
+    genai = None
+
 # ============================================
 # 0) CONFIG & CONSTANTS
 # ============================================
