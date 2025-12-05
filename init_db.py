@@ -64,7 +64,7 @@ def init_database(db_path: str = "iphone_gold.duckdb", force_recreate: bool = Fa
     try:
         # Load each CSV and create table
         for table_name, csv_file in csv_files.items():
-            print(f"  📥 Loading {csv_file} → {table_name}...")
+            print(f"  📥 Loading {csv_file} -> {table_name}...")
             df = pd.read_csv(csv_file)
             con.execute(f"CREATE OR REPLACE TABLE {table_name} AS SELECT * FROM df")
             row_count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
@@ -105,7 +105,7 @@ if __name__ == "__main__":
 - เป็นไฟล์ที่บอก Git ว่า**ไฟล์ไหนไม่ต้อง upload** ขึ้น GitHub
 - ใช้กับไฟล์ที่ไม่จำเป็น เช่น `.duckdb` (จะสร้างใหม่ทุกครั้งอยู่แล้ว)
 
-1. **ใน GitHub repository** กดปุ่ม **"Add file" → "Create new file"**
+1. **ใน GitHub repository** กดปุ่ม **"Add file" -> "Create new file"**
 2. **ตั้งชื่อไฟล์:** `.gitignore` (ต้องมีจุดข้างหน้า)
 3. **Copy code นี้ใส่:**
 ```
