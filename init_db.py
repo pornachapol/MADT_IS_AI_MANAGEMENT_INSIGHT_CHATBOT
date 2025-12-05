@@ -93,7 +93,7 @@ def init_database(db_path: str = "iphone_gold.duckdb", force_recreate: bool = Fa
 if __name__ == "__main__":
     # Run standalone
     init_database(force_recreate=False)
-```
+
 
 4. **กด "Commit changes"**
 
@@ -108,7 +108,7 @@ if __name__ == "__main__":
 1. **ใน GitHub repository** กดปุ่ม **"Add file" -> "Create new file"**
 2. **ตั้งชื่อไฟล์:** `.gitignore` (ต้องมีจุดข้างหน้า)
 3. **Copy code นี้ใส่:**
-```
+
 # Python
 __pycache__/
 *.py[cod]
