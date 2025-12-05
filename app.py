@@ -29,15 +29,13 @@ if 'lm_initialized' not in st.session_state:
 # Add a reset button in sidebar for troubleshooting
 with st.sidebar:
     st.markdown("### 🔧 Troubleshooting")
-    if st.button("🔄 Reset Cache", help="Clear all caches if you encounter errors"):
-        st.cache_resource.clear()
-        st.session_state.clear()
-        st.success("Cache cleared! Refresh the page.")
-        st.stop()
+    st.markdown("**⚠️ หาก error ซ้ำๆ:**")
+    st.markdown("กรุณา Refresh หน้าเว็บ (กด F5)")
+    st.markdown("หรือ Reboot app ใน Streamlit Cloud")
     
     st.markdown("---")
     st.markdown("**Status:**")
-    st.markdown(f"- LM Initialized: {'✅' if st.session_state.lm_initialized else '❌'}")
+    st.markdown(f"- LM Initialized: {'✅' if st.session_state.lm_initialized else '⏳'}")
 
 question = st.text_input(
     "พิมพ์คำถามผู้บริหาร",
@@ -71,18 +69,22 @@ if st.button("🔍 วิเคราะห์เลย", type="primary") and qu
             st.write(result.get("action", ""))
 
         except AssertionError as e:
-            if "No LM is loaded" in str(e):
-                st.error("⚠️ **LM Configuration Error**")
-                st.warning("กรุณากด **🔄 Reset Cache** ในแถบด้านซ้าย แล้วลองอีกครั้ง")
+            error_msg = str(e)
+            if "No LM is loaded" in error_msg or "can only be changed by the thread" in error_msg:
+                st.error("⚠️ **DSPy Configuration Error**")
+                st.warning("กรุณา **Refresh หน้าเว็บ (F5)** แล้วลองอีกครั้ง")
                 with st.expander("🔍 Technical Details"):
-                    st.code(f"Error: {str(e)}")
+                    st.code(f"Error: {error_msg}")
                     st.markdown("""
-                    **วิธีแก้:**
-                    1. กดปุ่ม "🔄 Reset Cache" ในแถบด้านซ้าย
-                    2. Refresh หน้าเว็บ (F5)
-                    3. ลองถามคำถามอีกครั้ง
+                    **สาเหตุ:** DSPy thread-local storage issue
                     
-                    ถ้ายังไม่หาย: Redeploy แอพใน Streamlit Cloud
+                    **วิธีแก้:**
+                    1. **Refresh หน้าเว็บ (กด F5)** ← แนะนำ
+                    2. ปิด tab แล้วเปิดใหม่
+                    3. หรือ Reboot app ใน Streamlit Cloud
+                    
+                    **หมายเหตุ:** ปัญหานี้เกิดจาก DSPy library ไม่รองรับ
+                    การ reconfigure ใน thread เดียวกัน
                     """)
             else:
                 raise
