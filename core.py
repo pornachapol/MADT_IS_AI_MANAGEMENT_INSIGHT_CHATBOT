@@ -422,3 +422,64 @@ class InsightFromResult(dspy.Signature):
     - explanation: อธิบายความหมายของตัวเลขต่อธุรกิจ (Demand–Sales–Stock หรือ Revenue)
     - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโมชัน, โฟกัสสาขา ฯลฯ)
     """
+
+    question: str    = InputField(desc="Original management question in Thai or English")
+    table_view: str  = InputField(desc="SQL result as a small markdown table")
+
+    kpi_summary: str = OutputField(desc="Short bullet list of key KPIs in Thai (B1)")
+    explanation: str = OutputField(desc="Insight explanation in Thai (B1)")
+    action: str      = OutputField(desc="1–3 recommended actions in Thai (B1)")
+
+
+insight_predictor = dspy.Predict(InsightFromResult)
+
+
+def generate_insight(question: str, table_view: str):
+    return insight_predictor(question=question, table_view=table_view)
+
+
+# ============================================
+# 5) MAIN ENTRY FOR APP: ask_bot_core
+# ============================================
+
+def ask_bot_core(question: str) -> dict:
+    """
+    ฟังก์ชัน core สำหรับใช้ใน Streamlit / API:
+    - รับคำถามผู้บริหาร (ภาษาไทย/อังกฤษ)
+    - ใช้ optimized_planner สร้าง SQL
+    - รัน SQL กับ DuckDB
+    - แปลงผลลัพธ์เป็น KPI + Explanation + Action
+    - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
+    """
+    # 1) ให้ DSPy วางแผน Intent + SQL
+    plan = optimized_planner(question)
+    raw_sql = plan.sql
+    sql = clean_sql(raw_sql)
+
+    # 2) รัน SQL กับ DuckDB
+    df, table_view = run_sql(sql)
+
+    # 3) ถ้าไม่มีข้อมูล ให้ตอบแบบ graceful
+    if df.empty:
+        return {
+            "question": question,
+            "intent": getattr(plan, "intent", ""),
+            "sql": sql,
+            "table_view": table_view,
+            "kpi_summary": "",
+            "explanation": "ไม่มีข้อมูลในช่วง / เงื่อนไขนี้",
+            "action": "ลองปรับคำถาม หรือช่วงวันที่ใหม่อีกครั้ง",
+        }
+
+    # 4) ให้ LLM สรุปอินไซต์จากตาราง
+    ins = generate_insight(question=question, table_view=table_view)
+
+    return {
+        "question": question,
+        "intent": getattr(plan, "intent", ""),
+        "sql": sql,
+        "table_view": table_view,
+        "kpi_summary": ins.kpi_summary,
+        "explanation": ins.explanation,
+        "action": ins.action,
+    }
