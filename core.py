@@ -13,43 +13,51 @@ from dspy.teleprompt import BootstrapFewShot
 # 0) LLM / DSPy CONFIG
 # ============================================
 
-# Get API key from Streamlit secrets or environment
-try:
-    import streamlit as st
-    if "GEMINI_API_KEY" in st.secrets:
-        os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    # Not running in Streamlit or secrets not available
-    pass
-
-# Verify API key exists
-if "GEMINI_API_KEY" not in os.environ:
-    raise ValueError(
-        "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
-    )
-
+# กำหนดชื่อไฟล์ Database ให้ชัดเจน
+DB_PATH = "iphone_gold.duckdb"
 
 def load_lm():
     """Load LM exactly once and configure DSPy."""
-    lm = dspy.LM("gemini/gemini-2.5-flash")
+    
+    # 1. พยายามดึง Key จาก Streamlit Secrets
+    try:
+        import streamlit as st
+        if "GEMINI_API_KEY" in st.secrets:
+            api_key = st.secrets["GEMINI_API_KEY"]
+            os.environ["GEMINI_API_KEY"] = api_key
+            # 🔥 Fix: ตั้งค่า GOOGLE_API_KEY ด้วย กัน Library สับสน
+            os.environ["GOOGLE_API_KEY"] = api_key
+    except Exception:
+        pass
+
+    # 2. ตรวจสอบว่ามี Key หรือไม่
+    if "GEMINI_API_KEY" not in os.environ and "GOOGLE_API_KEY" not in os.environ:
+        raise ValueError(
+            "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
+        )
+
+    # 🔥 Fix: เปลี่ยนชื่อ Model เป็น 'gemini-1.5-flash' (รุ่นปัจจุบันที่เสถียร)
+    # อย่าใช้ 2.5 เพราะยังไม่มี
+    lm = dspy.LM("gemini/gemini-1.5-flash")
+    
+    # Configure global setting
     dspy.configure(lm=lm)
     return lm
 
-
 # Load LM at import time (reload-safe enough for this app)
 GLOBAL_LM = load_lm()
-
-# DuckDB path
-DB_PATH = "iphone_gold.duckdb"
 
 
 # Initialize database from CSV files if needed
 def ensure_database_exists():
     """Ensure DuckDB database exists, create from CSV if needed"""
     if not os.path.exists(DB_PATH):
-        print("📦 Database not found. Creating from CSV files...")
-        from init_db import init_database
-        init_database(DB_PATH)
+        print(f"📦 Database not found at {DB_PATH}. Creating from CSV files...")
+        try:
+            from init_db import init_database
+            init_database(DB_PATH)
+        except ImportError:
+            print("⚠️ Error: init_db.py not found. Cannot create database.")
     else:
         # Verify database is readable
         try:
@@ -58,9 +66,12 @@ def ensure_database_exists():
             con.close()
         except Exception as e:
             print(f"⚠️ Database corrupted: {e}. Recreating...")
-            os.remove(DB_PATH)
-            from init_db import init_database
-            init_database(DB_PATH)
+            try:
+                os.remove(DB_PATH)
+                from init_db import init_database
+                init_database(DB_PATH)
+            except Exception as ex:
+                print(f"⚠️ Critical Error recreating DB: {ex}")
 
 
 ensure_database_exists()
@@ -235,8 +246,8 @@ ex3 = dspy.Example(
         JOIN dim_date d   ON r.date_key   = d.date_key
         LEFT JOIN fact_contract c
           ON r.date_key   = c.date_key
-         AND r.branch_id  = c.branch_id
-         AND r.product_id = c.product_id
+          AND r.branch_id  = c.branch_id
+          AND r.product_id = c.product_id
         WHERE d.year = 2025
           AND d.month = 11
         GROUP BY b.branch_code, b.branch_name
@@ -259,8 +270,8 @@ ex4 = dspy.Example(
         FROM fact_registration r
         JOIN fact_inventory_snapshot i
           ON r.date_key   = i.date_key
-         AND r.branch_id  = i.branch_id
-         AND r.product_id = i.product_id
+          AND r.branch_id  = i.branch_id
+          AND r.product_id = i.product_id
         JOIN dim_branch b ON r.branch_id = b.branch_id
         WHERE r.date_key = 20251111
         GROUP BY b.branch_code, b.branch_name
@@ -288,8 +299,8 @@ ex5 = dspy.Example(
         FROM fact_contract c
         JOIN fact_inventory_snapshot i
           ON c.date_key   = i.date_key
-         AND c.branch_id  = i.branch_id
-         AND c.product_id = i.product_id
+          AND c.branch_id  = i.branch_id
+          AND c.product_id = i.product_id
         JOIN dim_branch b  ON c.branch_id  = b.branch_id
         JOIN dim_product p ON c.product_id = p.product_id
         WHERE c.date_key = 20251111
@@ -400,8 +411,8 @@ ex9 = dspy.Example(
         FROM monthly_revenue cur
         LEFT JOIN monthly_revenue prev
           ON cur.year  = prev.year
-         AND cur.month = 11
-         AND prev.month = 10;
+          AND cur.month = 11
+          AND prev.month = 10;
     """,
     comment="Compare November 2025 revenue vs October 2025 by multiplying contract_count * list_price and computing difference and growth percentage."
 ).with_inputs("question")
@@ -462,43 +473,15 @@ def ask_bot_core(question: str) -> dict:
     - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
     """
     
-    # 🔥 CRITICAL FIX: Re-configure DSPy for the current Streamlit thread
-    # Without this, Streamlit forgets the LM settings on interaction.
+    # 🔥 Fix: ต้อง re-configure ทุกครั้งใน Main function เพื่อแก้ปัญหา Streamlit threading
     dspy.configure(lm=GLOBAL_LM)
 
-    # 1) ให้ DSPy วางแผน Intent + SQL
-    try:
-        plan = optimized_planner(question)
-    except Exception as e:
-        # Fallback if planner fails specifically due to LM issues
-        return {
-            "question": question,
-            "intent": "error",
-            "sql": "",
-            "table_view": "",
-            "kpi_summary": "Error generating plan",
-            "explanation": f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ AI: {str(e)}",
-            "action": "โปรดตรวจสอบ API Key หรือลองใหม่อีกครั้ง"
-        }
-
+    plan = optimized_planner(question)
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
-    # 2) รัน SQL กับ DuckDB
-    try:
-        df, table_view = run_sql(sql)
-    except Exception as e:
-         return {
-            "question": question,
-            "intent": getattr(plan, "intent", "sql_error"),
-            "sql": sql,
-            "table_view": "Error",
-            "kpi_summary": "",
-            "explanation": f"SQL Error: {str(e)}",
-            "action": "ระบบสร้าง SQL ไม่ถูกต้อง โปรดลองถามใหม่"
-        }
+    df, table_view = run_sql(sql)
 
-    # 3) ถ้าไม่มีข้อมูล ให้ตอบแบบ graceful
     if df.empty:
         return {
             "question": question,
@@ -510,8 +493,6 @@ def ask_bot_core(question: str) -> dict:
             "action": "ลองปรับคำถาม หรือช่วงวันที่ใหม่อีกครั้ง",
         }
 
-    # 4) ให้ LLM สรุปอินไซต์จากตาราง
-    # Note: We don't need to re-configure here because we did it at the start of the function
     ins = generate_insight(question=question, table_view=table_view)
 
     return {
