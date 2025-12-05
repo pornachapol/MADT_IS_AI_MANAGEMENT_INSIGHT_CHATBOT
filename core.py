@@ -47,7 +47,7 @@ def ensure_lm_configured():
         
         @st.cache_resource
         def _configure_lm():
-            lm = dspy.LM("gemini/gemini-2.0-flash")
+            lm = dspy.LM("gemini/gemini-2.5-flash")
             dspy.configure(lm=lm)
             return lm
         
@@ -55,7 +55,7 @@ def ensure_lm_configured():
         
     except ImportError:
         # Not running in Streamlit
-        lm = dspy.LM("gemini/gemini-2.0-flash")
+        lm = dspy.LM("gemini/gemini-2.5-flash")
         dspy.configure(lm=lm)
 
 
@@ -367,7 +367,263 @@ ex9 = dspy.Example(
     """
 ).with_inputs("question")
 
-trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
+ex10 = dspy.Example(
+    question="ตอนนี้เราขาดโอกาสการขายที่ไหนบ้าง? มี SKU ไหนที่ลูกค้าต้องการแต่สต็อกไม่พอ?",
+    intent="lost_opportunity_current",
+    sql="""
+        WITH latest_date AS (
+            SELECT MAX(date_key) as max_date
+            FROM fact_registration
+        ),
+        lost_opp AS (
+            SELECT
+                b.branch_code,
+                b.branch_name,
+                b.province,
+                p.generation AS iphone_gen,
+                p.storage_gb,
+                p.color,
+                SUM(r.reg_count) AS total_demand,
+                SUM(COALESCE(i.stock_qty, 0)) AS current_stock,
+                SUM(r.reg_count) - SUM(COALESCE(i.stock_qty, 0)) AS lost_opportunity,
+                SUM(r.reg_count) - SUM(COALESCE(i.stock_qty, 0)) * AVG(p.base_price) AS lost_revenue_estimate
+            FROM fact_registration r
+            JOIN dim_branch b ON r.branch_id = b.branch_id
+            JOIN dim_product p ON r.product_id = p.product_id
+            LEFT JOIN fact_inventory_snapshot i 
+                ON r.date_key = i.date_key 
+                AND r.branch_id = i.branch_id 
+                AND r.product_id = i.product_id
+            CROSS JOIN latest_date ld
+            WHERE r.date_key = ld.max_date
+              AND b.branch_type = 'SHOP'
+            GROUP BY b.branch_code, b.branch_name, b.province, p.generation, p.storage_gb, p.color
+            HAVING SUM(r.reg_count) > SUM(COALESCE(i.stock_qty, 0))
+        )
+        SELECT
+            branch_code,
+            branch_name,
+            province,
+            iphone_gen,
+            storage_gb,
+            color,
+            total_demand,
+            current_stock,
+            lost_opportunity,
+            ROUND(lost_revenue_estimate, 0) AS lost_revenue_baht,
+            ROUND(lost_opportunity * 100.0 / total_demand, 1) AS stockout_rate_pct
+        FROM lost_opp
+        ORDER BY lost_opportunity DESC
+        LIMIT 20;
+    """
+).with_inputs("question")
+
+ex11 = dspy.Example(
+    question="เติมของสาขาไหนจะทำให้ยอดขายเพิ่มขึ้นมากที่สุด? สาขาไหนควรเติมของด่วน?",
+    intent="restocking_priority",
+    sql="""
+        WITH latest_date AS (
+            SELECT MAX(date_key) as max_date
+            FROM fact_registration
+        ),
+        recent_7days AS (
+            SELECT MAX(date_key) - 6 as start_date
+            FROM fact_registration
+        ),
+        demand_pattern AS (
+            SELECT
+                r.branch_id,
+                r.product_id,
+                AVG(r.reg_count) AS avg_daily_demand,
+                SUM(COALESCE(c.contract_count, 0)) AS actual_sales_7d,
+                SUM(r.reg_count) AS total_demand_7d,
+                CASE 
+                    WHEN SUM(r.reg_count) > 0 
+                    THEN ROUND(SUM(COALESCE(c.contract_count, 0)) * 100.0 / SUM(r.reg_count), 1)
+                    ELSE 0 
+                END AS conversion_rate
+            FROM fact_registration r
+            LEFT JOIN fact_contract c 
+                ON r.date_key = c.date_key 
+                AND r.branch_id = c.branch_id 
+                AND r.product_id = c.product_id
+            CROSS JOIN recent_7days rd
+            WHERE r.date_key >= rd.start_date
+            GROUP BY r.branch_id, r.product_id
+        ),
+        current_inventory AS (
+            SELECT
+                i.branch_id,
+                i.product_id,
+                i.stock_qty
+            FROM fact_inventory_snapshot i
+            CROSS JOIN latest_date ld
+            WHERE i.date_key = ld.max_date
+        ),
+        restock_priority AS (
+            SELECT
+                b.branch_code,
+                b.branch_name,
+                b.province,
+                p.generation AS iphone_gen,
+                p.storage_gb,
+                p.color,
+                ROUND(dp.avg_daily_demand, 1) AS avg_daily_demand,
+                COALESCE(ci.stock_qty, 0) AS current_stock,
+                ROUND(COALESCE(ci.stock_qty, 0) / NULLIF(dp.avg_daily_demand, 0), 1) AS days_of_stock,
+                dp.conversion_rate,
+                dp.actual_sales_7d,
+                dp.total_demand_7d - dp.actual_sales_7d AS missed_sales_7d,
+                CASE
+                    WHEN COALESCE(ci.stock_qty, 0) = 0 THEN 'STOCKOUT'
+                    WHEN COALESCE(ci.stock_qty, 0) / NULLIF(dp.avg_daily_demand, 0) < 3 THEN 'CRITICAL'
+                    WHEN COALESCE(ci.stock_qty, 0) / NULLIF(dp.avg_daily_demand, 0) < 7 THEN 'LOW'
+                    ELSE 'OK'
+                END AS stock_status,
+                CEIL(GREATEST(0, dp.avg_daily_demand * 14 - COALESCE(ci.stock_qty, 0))) AS recommended_restock,
+                CEIL(GREATEST(0, dp.avg_daily_demand * 14 - COALESCE(ci.stock_qty, 0))) * p.base_price AS potential_revenue
+            FROM demand_pattern dp
+            JOIN dim_branch b ON dp.branch_id = b.branch_id
+            JOIN dim_product p ON dp.product_id = p.product_id
+            LEFT JOIN current_inventory ci ON dp.branch_id = ci.branch_id AND dp.product_id = ci.product_id
+            WHERE b.branch_type = 'SHOP'
+              AND dp.avg_daily_demand > 0.5
+        )
+        SELECT
+            branch_code,
+            branch_name,
+            province,
+            iphone_gen,
+            storage_gb,
+            color,
+            stock_status,
+            avg_daily_demand,
+            current_stock,
+            days_of_stock,
+            conversion_rate AS cvr_pct,
+            recommended_restock AS restock_qty,
+            potential_revenue AS potential_revenue_baht
+        FROM restock_priority
+        WHERE stock_status IN ('STOCKOUT', 'CRITICAL', 'LOW')
+        ORDER BY 
+            CASE stock_status 
+                WHEN 'STOCKOUT' THEN 1 
+                WHEN 'CRITICAL' THEN 2 
+                WHEN 'LOW' THEN 3 
+            END,
+            potential_revenue DESC
+        LIMIT 30;
+    """
+).with_inputs("question")
+
+ex12 = dspy.Example(
+    question="สาขาไหนมี conversion rate ดีที่สุด และสาขาไหนควรปรับปรุง?",
+    intent="branch_conversion_performance",
+    sql="""
+        WITH recent_7days AS (
+            SELECT MAX(date_key) - 6 as start_date
+            FROM fact_registration
+        ),
+        branch_perf AS (
+            SELECT
+                b.branch_code,
+                b.branch_name,
+                b.province,
+                SUM(r.reg_count) AS total_registrations,
+                SUM(COALESCE(c.contract_count, 0)) AS total_contracts,
+                CASE 
+                    WHEN SUM(r.reg_count) = 0 THEN 0
+                    ELSE ROUND(SUM(COALESCE(c.contract_count, 0)) * 100.0 / SUM(r.reg_count), 1)
+                END AS conversion_rate,
+                SUM(COALESCE(c.contract_count, 0) * p.base_price) AS total_revenue
+            FROM fact_registration r
+            JOIN dim_branch b ON r.branch_id = b.branch_id
+            LEFT JOIN fact_contract c 
+                ON r.date_key = c.date_key 
+                AND r.branch_id = c.branch_id 
+                AND r.product_id = c.product_id
+            LEFT JOIN dim_product p ON r.product_id = p.product_id
+            CROSS JOIN recent_7days rd
+            WHERE r.date_key >= rd.start_date
+              AND b.branch_type = 'SHOP'
+            GROUP BY b.branch_code, b.branch_name, b.province
+        )
+        SELECT
+            branch_code,
+            branch_name,
+            province,
+            total_registrations,
+            total_contracts,
+            conversion_rate,
+            total_revenue,
+            CASE
+                WHEN conversion_rate >= 60 THEN 'EXCELLENT'
+                WHEN conversion_rate >= 50 THEN 'GOOD'
+                WHEN conversion_rate >= 40 THEN 'AVERAGE'
+                ELSE 'NEEDS_IMPROVEMENT'
+            END AS performance_tier
+        FROM branch_perf
+        ORDER BY conversion_rate DESC;
+    """
+).with_inputs("question")
+
+ex13 = dspy.Example(
+    question="สาขาไหนมีสต็อกพอขายกี่วัน? สาขาไหนจะหมดสต็อกเร็วที่สุด?",
+    intent="inventory_days_supply",
+    sql="""
+        WITH latest_date AS (
+            SELECT MAX(date_key) as max_date
+            FROM fact_registration
+        ),
+        recent_7days AS (
+            SELECT MAX(date_key) - 6 as start_date
+            FROM fact_registration
+        ),
+        avg_demand AS (
+            SELECT
+                r.branch_id,
+                r.product_id,
+                AVG(r.reg_count) AS avg_daily_demand
+            FROM fact_registration r
+            CROSS JOIN recent_7days rd
+            WHERE r.date_key >= rd.start_date
+            GROUP BY r.branch_id, r.product_id
+        ),
+        current_stock AS (
+            SELECT
+                i.branch_id,
+                i.product_id,
+                i.stock_qty
+            FROM fact_inventory_snapshot i
+            CROSS JOIN latest_date ld
+            WHERE i.date_key = ld.max_date
+        )
+        SELECT
+            b.branch_code,
+            b.branch_name,
+            p.generation AS iphone_gen,
+            p.storage_gb,
+            cs.stock_qty AS current_stock,
+            ROUND(ad.avg_daily_demand, 1) AS avg_daily_demand,
+            ROUND(cs.stock_qty / NULLIF(ad.avg_daily_demand, 0), 1) AS days_of_supply,
+            CASE
+                WHEN cs.stock_qty = 0 THEN 'OUT_OF_STOCK'
+                WHEN cs.stock_qty / NULLIF(ad.avg_daily_demand, 0) < 3 THEN 'CRITICAL'
+                WHEN cs.stock_qty / NULLIF(ad.avg_daily_demand, 0) < 7 THEN 'LOW'
+                WHEN cs.stock_qty / NULLIF(ad.avg_daily_demand, 0) < 14 THEN 'NORMAL'
+                ELSE 'EXCESS'
+            END AS inventory_status
+        FROM current_stock cs
+        JOIN avg_demand ad ON cs.branch_id = ad.branch_id AND cs.product_id = ad.product_id
+        JOIN dim_branch b ON cs.branch_id = b.branch_id
+        JOIN dim_product p ON cs.product_id = p.product_id
+        WHERE b.branch_type = 'SHOP'
+          AND ad.avg_daily_demand > 0.5
+        ORDER BY days_of_supply ASC, avg_daily_demand DESC;
+    """
+).with_inputs("question")
+
+trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9, ex10, ex11, ex12, ex13]
 
 
 def get_optimized_planner():
