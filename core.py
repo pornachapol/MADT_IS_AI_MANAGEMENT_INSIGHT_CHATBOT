@@ -417,5 +417,8 @@ class InsightFromResult(dspy.Signature):
 
     Guideline:
     - kpi_summary: bullet สั้นๆ สรุปตัวเลขสำคัญ
-    - explanation: อธิบายความหมายของตัวเลขต่อธุรกิจ (Demand–Sales–Stock)
-    - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโม
+        * ถ้าคอลัมน์ชื่อมีคำว่า "revenue", "amount", "baht", "บาท" ให้ใช้หน่วย "บาท"
+        * ถ้าเป็นจำนวนเครื่อง เช่น contract_count, total_units ให้ใช้คำว่า "เครื่อง" หลีกเลี่ยงใช้ "บาท"
+    - explanation: อธิบายความหมายของตัวเลขต่อธุรกิจ (Demand–Sales–Stock หรือ Revenue)
+    - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโมชัน, โฟกัสสาขา ฯลฯ)
+    """
