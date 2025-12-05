@@ -388,41 +388,27 @@ def generate_insight(question: str, table_view: str):
 # ============================================
 
 def ask_bot_core(question: str) -> dict:
-    # ย้ำ config LM เผื่อ Streamlit reload แปลก ๆ
-    dspy.configure(lm=GLOBAL_LM)
+    """
+    ฟังก์ชัน core สำหรับใช้ใน Streamlit / API:
+    - รับคำถามผู้บริหาร (ภาษาไทย/อังกฤษ)
+    - ใช้ optimized_planner สร้าง SQL
+    - รัน SQL กับ DuckDB
+    - แปลงผลลัพธ์เป็น KPI + Explanation + Action
+    - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
+    """
 
-    # 1) ให้ DSPy วางแผน Intent + SQL แบบกัน error
-    try:
-        plan = optimized_planner(question)
-    except Exception as e:
-        return {
-            "question": question,
-            "intent": "planner_error",
-            "sql": "",
-            "table_view": "",
-            "kpi_summary": "",
-            "explanation": f"มีปัญหาที่ชั้นวางแผน SQL: {e}",
-            "action": "ลองถามใหม่อีกครั้ง หรือปรับคำถามให้ชัดขึ้น",
-        }
+    # ❌ ห้าม configure ซ้ำในอีก thread
+    # dspy.configure(lm=GLOBAL_LM)
 
-    raw_sql = getattr(plan, "sql", "")
+    # 1) ให้ DSPy วางแผน Intent + SQL
+    plan = optimized_planner(question)
+    raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
-    # 2) รัน SQL
-    try:
-        df, table_view = run_sql(sql)
-    except Exception as e:
-        return {
-            "question": question,
-            "intent": getattr(plan, "intent", ""),
-            "sql": sql,
-            "table_view": "",
-            "kpi_summary": "",
-            "explanation": f"SQL ผิดพลาด: {e}",
-            "action": "ลองปรับคำถามใหม่ หรือเช็ก schema ของ datamart",
-        }
+    # 2) รัน SQL กับ DuckDB
+    df, table_view = run_sql(sql)
 
-    # 3) ถ้าไม่มีข้อมูลเลย
+    # 3) ถ้าไม่มีข้อมูล ให้ตอบแบบ graceful
     if df.empty:
         return {
             "question": question,
@@ -434,25 +420,16 @@ def ask_bot_core(question: str) -> dict:
             "action": "ลองเปลี่ยนเดือน / ปี หรือเงื่อนไขดูอีกครั้ง",
         }
 
-    # 4) สร้าง Insight
-    try:
-        ins = generate_insight(question=question, table_view=table_view)
-        kpi_summary = ins.kpi_summary
-        explanation = ins.explanation
-        action = ins.action
-    except Exception:
-        # fallback ถ้า LLM สรุป insight พัง
-        kpi_summary = "สรุปจากตารางผลลัพธ์"
-        explanation = "ระบบสรุป Insight อัตโนมัติมีปัญหา แสดงผลดิบจาก SQL แทน"
-        action = "ลองถามใหม่ด้วยคำถามที่สั้นและตรงประเด็น"
+    # 4) ให้ LLM สรุปอินไซต์จากตาราง
+    ins = generate_insight(question=question, table_view=table_view)
 
     return {
         "question": question,
         "intent": getattr(plan, "intent", ""),
         "sql": sql,
         "table_view": table_view,
-        "kpi_summary": kpi_summary,
-        "explanation": explanation,
-        "action": action,
+        "kpi_summary": ins.kpi_summary,
+        "explanation": ins.explanation,
+        "action": ins.action,
     }
 
