@@ -19,7 +19,8 @@ try:
     if "GEMINI_API_KEY" in st.secrets:
         os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
 except Exception:
-    pass  # Not running in Streamlit or secrets not available
+    # Not running in Streamlit or secrets not available
+    pass
 
 # Verify API key exists
 if "GEMINI_API_KEY" not in os.environ:
@@ -27,28 +28,20 @@ if "GEMINI_API_KEY" not in os.environ:
         "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
     )
 
-# Configure DSPy LM (สำคัญ: ต้องเรียก dspy.configure ไม่ใช่ dspy.settings.configure)
-# Get API key from Streamlit secrets or environment
-try:
-    import streamlit as st
-    if "GEMINI_API_KEY" in st.secrets:
-        os.environ["GEMINI_API_KEY"] = st.secrets["GEMINI_API_KEY"]
-except Exception:
-    pass  # Running outside Streamlit or secrets unavailable
 
-# Verify API key exists
-if "GEMINI_API_KEY" not in os.environ:
-    raise ValueError("GEMINI_API_KEY not found. Please set it in Streamlit secrets.")
-
-# 🔥 MUST DO: Define LM once as global in module scope
 def load_lm():
-    """Load LM exactly once and return it (fix for Streamlit Cloud)."""
+    """Load LM exactly once and configure DSPy."""
     lm = dspy.LM("gemini/gemini-2.5-flash")
     dspy.configure(lm=lm)
     return lm
 
-# Load LM at import time (Streamlit reload-safe)
+
+# Load LM at import time (reload-safe enough for this app)
 GLOBAL_LM = load_lm()
+
+# DuckDB path
+DB_PATH = "iphone_gold.duckdb"
+
 
 # Initialize database from CSV files if needed
 def ensure_database_exists():
@@ -69,12 +62,13 @@ def ensure_database_exists():
             from init_db import init_database
             init_database(DB_PATH)
 
-ensure_database_exists()
 
+ensure_database_exists()
 
 # ============================================
 # 1) HELPER: CLEAN SQL + RUN SQL
 # ============================================
+
 
 def clean_sql(sql: str) -> str:
     """
@@ -165,9 +159,9 @@ class IntentAndSQL(dspy.Signature):
     """
 
     question: str = InputField(desc="Top-management analytics question in Thai or English")
-    intent: str   = OutputField(desc="Short intent name for the question, e.g. best_branch_mtd")
-    sql: str      = OutputField(desc="Valid DuckDB SQL over the given schema and rules")
-    comment: str  = OutputField(desc="Short English explanation of what the SQL does")
+    intent: str = OutputField(desc="Short intent name for the question, e.g. best_branch_mtd")
+    sql: str = OutputField(desc="Valid DuckDB SQL over the given schema and rules")
+    comment: str = OutputField(desc="Short English explanation of what the SQL does")
 
 
 class SQLPlanner(dspy.Module):
@@ -180,7 +174,7 @@ class SQLPlanner(dspy.Module):
 
 
 # ============================================
-# 3) TRAINSET (8 EXAMPLES) + TELEPROMPTER
+# 3) TRAINSET (9 EXAMPLES) + TELEPROMPTER
 # ============================================
 
 # 1) Best-selling iPhone generation in Nov (MTD)
@@ -423,7 +417,6 @@ def dummy_metric(example, prediction, trace=None):
 teleprompter = BootstrapFewShot(metric=dummy_metric)
 optimized_planner = teleprompter.compile(SQLPlanner(), trainset=trainset)
 
-
 # ============================================
 # 4) INSIGHT LAYER
 # ============================================
@@ -440,12 +433,12 @@ class InsightFromResult(dspy.Signature):
     - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโมชัน, โฟกัสสาขา ฯลฯ)
     """
 
-    question: str    = InputField(desc="Original management question in Thai or English")
-    table_view: str  = InputField(desc="SQL result as a small markdown table")
+    question: str = InputField(desc="Original management question in Thai or English")
+    table_view: str = InputField(desc="SQL result as a small markdown table")
 
     kpi_summary: str = OutputField(desc="Short bullet list of key KPIs in Thai (B1)")
     explanation: str = OutputField(desc="Insight explanation in Thai (B1)")
-    action: str      = OutputField(desc="1–3 recommended actions in Thai (B1)")
+    action: str = OutputField(desc="1–3 recommended actions in Thai (B1)")
 
 
 insight_predictor = dspy.Predict(InsightFromResult)
@@ -468,15 +461,12 @@ def ask_bot_core(question: str) -> dict:
     - แปลงผลลัพธ์เป็น KPI + Explanation + Action
     - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
     """
-    # 1) ให้ DSPy วางแผน Intent + SQL
     plan = optimized_planner(question)
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
-    # 2) รัน SQL กับ DuckDB
     df, table_view = run_sql(sql)
 
-    # 3) ถ้าไม่มีข้อมูล ให้ตอบแบบ graceful
     if df.empty:
         return {
             "question": question,
@@ -488,7 +478,6 @@ def ask_bot_core(question: str) -> dict:
             "action": "ลองปรับคำถาม หรือช่วงวันที่ใหม่อีกครั้ง",
         }
 
-    # 4) ให้ LLM สรุปอินไซต์จากตาราง
     ins = generate_insight(question=question, table_view=table_view)
 
     return {
