@@ -47,7 +47,7 @@ def ensure_lm_configured():
         configure_api_key()
         # ใช้ Gemini 2.5 Flash Thinking สำหรับ performance ที่ดีขึ้น
         lm = dspy.LM(
-            "gemini/gemini-2.5-flash-thinking-exp-01-21",
+            "gemini/gemini-2.0-flash-thinking-exp-1219",
             temperature=0.0  # Deterministic สำหรับ SQL
         )
         dspy.configure(lm=lm)
