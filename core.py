@@ -47,7 +47,7 @@ def ensure_lm_configured():
         configure_api_key()
         # ใช้ Gemini 1.5 Flash (stable, free tier)
         lm = dspy.LM(
-            "gemini/gemini-1.5-flash",
+            "gemini/gemini-2.5-flash",
             temperature=0.0  # Deterministic สำหรับ SQL
         )
         dspy.configure(lm=lm)
