@@ -36,9 +36,9 @@ def load_lm():
             "GEMINI_API_KEY not found. Please set it in Streamlit secrets or environment variables."
         )
 
-    # 🔥 Fix: เปลี่ยนชื่อ Model เป็น 'gemini-1.5-flash' (รุ่นปัจจุบันที่เสถียร)
+    # 🔥 Fix: เปลี่ยนชื่อ Model เป็น 'gemini-2.5-flash' (รุ่นปัจจุบันที่เสถียร)
     # อย่าใช้ 2.5 เพราะยังไม่มี
-    lm = dspy.LM("gemini/gemini-1.5-flash")
+    lm = dspy.LM("gemini/gemini-2.5-flash")
     
     # Configure global setting
     dspy.configure(lm=lm)
