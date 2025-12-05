@@ -1,5 +1,6 @@
 # core.py
 # Core logic for iPhone Gold Datamart Insight Chatbot
+# FULL VERSION (9 Examples + Auto-Discovery Model)
 
 import os
 import re
@@ -10,102 +11,111 @@ from dspy import InputField, OutputField
 from dspy.teleprompt import BootstrapFewShot
 
 # ============================================
-# 0) LLM / DSPy CONFIG
+# 0) CONFIG & CONSTANTS
 # ============================================
 
-# กำหนดชื่อไฟล์ Database ให้ชัดเจน
 DB_PATH = "iphone_gold.duckdb"
+
+# ============================================
+# 1) LLM CONFIG (AUTO-DISCOVERY MODE)
+# ============================================
 
 def load_lm():
     """
-    Load Gemini 1.5 Flash (Free Tier Recommended)
+    Load LM with Auto-Failover.
+    ระบบจะลองเชื่อมต่อ Model ทีละตัว จนกว่าจะเจอตัวที่ใช้งานได้ (แก้ปัญหา 404)
     """
-    # 1. Setup API Keys
+    # 1. Setup Keys
     try:
         import streamlit as st
         if "GEMINI_API_KEY" in st.secrets:
             api_key = st.secrets["GEMINI_API_KEY"]
             os.environ["GEMINI_API_KEY"] = api_key
-            os.environ["GOOGLE_API_KEY"] = api_key # สำคัญมากสำหรับ litellm
+            os.environ["GOOGLE_API_KEY"] = api_key
     except Exception:
         pass
 
-    if "GOOGLE_API_KEY" not in os.environ:
-         raise ValueError("ไม่พบ API KEY ใน .streamlit/secrets.toml")
+    if "GOOGLE_API_KEY" not in os.environ and "GEMINI_API_KEY" not in os.environ:
+         raise ValueError("ไม่พบ API Key! กรุณาตรวจสอบ .streamlit/secrets.toml")
 
-    # 2. 🔥 เลือก Model: gemini-1.5-flash (ชัวร์สุดสำหรับ Free Tier)
-    # หมายเหตุ: dspy ใช้ prefix 'gemini/' เพื่อระบุ Provider
-    model_name = "gemini/gemini-1.5-flash"
-    
-    print(f"🚀 Connecting to: {model_name}")
+    # 2. 🔥 รายชื่อ Model ที่จะไล่ลอง (กันเหนียว 404)
+    candidate_models = [
+        "gemini/gemini-1.5-flash-latest", # ลองตัวล่าสุด
+        "gemini/gemini-1.5-flash-001",    # ลองตัว version เจาะจง
+        "gemini/gemini-1.5-flash",        # ลองตัว alias ปกติ
+        "gemini/gemini-1.5-pro-latest",   # ลองตัว Pro
+        "gemini/gemini-pro"               # ไม้ตายสุดท้าย
+    ]
 
-    try:
-        lm = dspy.LM(model_name)
-    except Exception as e:
-        print(f"⚠️ Litellm Error: {e}")
-        # Fallback กรณีเครื่อง library เก่า
+    lm = None
+    print("🔄 Connecting to Gemini (Auto-Discovery Mode)...")
+
+    for model in candidate_models:
+        try:
+            print(f"   👉 Testing: {model} ...")
+            # ลองสร้าง Object
+            temp_lm = dspy.LM(model)
+            # ลองยิง Test Request 1 ครั้ง
+            dspy.configure(lm=temp_lm)
+            dspy.Predict("test_in -> test_out")(test_in="ping")
+            
+            # ถ้าผ่าน แสดงว่าใช้ได้
+            print(f"   ✅ CONNECTED! Using: {model}")
+            lm = temp_lm
+            break
+        except Exception as e:
+            print(f"   ❌ Failed ({model}): {str(e)}")
+            continue
+
+    if lm is None:
+        # ถ้าหาไม่เจอเลย ให้ใช้ท่าไม้ตายสุดท้าย (Native Client)
+        print("⚠️ All litellm attempts failed. Switching to Native Google Client...")
         lm = dspy.Google(model="gemini-1.5-flash", api_key=os.environ["GOOGLE_API_KEY"])
 
     dspy.configure(lm=lm)
     return lm
 
-# Load LM at import time (reload-safe enough for this app)
+# Load Global LM
 GLOBAL_LM = load_lm()
 
 
-# Initialize database from CSV files if needed
+# Initialize database
 def ensure_database_exists():
     """Ensure DuckDB database exists, create from CSV if needed"""
     if not os.path.exists(DB_PATH):
-        print(f"📦 Database not found at {DB_PATH}. Creating from CSV files...")
+        print(f"📦 Creating database at {DB_PATH}...")
         try:
             from init_db import init_database
             init_database(DB_PATH)
         except ImportError:
-            print("⚠️ Error: init_db.py not found. Cannot create database.")
+            print("⚠️ Error: init_db.py not found.")
     else:
-        # Verify database is readable
         try:
             con = duckdb.connect(DB_PATH, read_only=True)
             con.execute("SELECT 1").fetchone()
             con.close()
-        except Exception as e:
-            print(f"⚠️ Database corrupted: {e}. Recreating...")
-            try:
-                os.remove(DB_PATH)
-                from init_db import init_database
-                init_database(DB_PATH)
-            except Exception as ex:
-                print(f"⚠️ Critical Error recreating DB: {ex}")
-
+        except Exception:
+            if os.path.exists(DB_PATH): os.remove(DB_PATH)
+            from init_db import init_database
+            init_database(DB_PATH)
 
 ensure_database_exists()
 
-# ============================================
-# 1) HELPER: CLEAN SQL + RUN SQL
-# ============================================
 
+# ============================================
+# 2) HELPER FUNCTIONS
+# ============================================
 
 def clean_sql(sql: str) -> str:
     """
     ลบ code fence พวก ``` หรือ ```duckdb ออกจาก SQL ที่ LLM ส่งมา
-    ให้เหลือเฉพาะ SQL ล้วน ๆ
     """
-    if not isinstance(sql, str):
-        return sql
-
+    if not isinstance(sql, str): return sql
     s = sql.strip()
-
-    # ถ้าเริ่มด้วย ``` (เช่น ```sql, ```duckdb)
     if s.startswith("```"):
-        # ตัดบรรทัดแรก (```xxx) ออก
         s = re.sub(r"^```[a-zA-Z0-9_]*\n?", "", s)
-        # ถ้าจบด้วย ``` ให้ตัด ``` ทิ้ง
-        if s.endswith("```"):
-            s = s[:-3]
-
+        if s.endswith("```"): s = s[:-3]
     return s.strip()
-
 
 def run_sql(sql: str, db_path: str = DB_PATH):
     """
@@ -115,19 +125,13 @@ def run_sql(sql: str, db_path: str = DB_PATH):
         con = duckdb.connect(db_path, read_only=True)
         df = con.execute(sql).df()
         con.close()
-
-        if df.empty:
-            table_view = "*(no rows)*"
-        else:
-            table_view = df.to_markdown(index=False)
-
-        return df, table_view
+        return df, (df.to_markdown(index=False) if not df.empty else "*(no rows)*")
     except Exception as e:
-        raise Exception(f"SQL Execution Error: {str(e)}\nSQL: {sql}")
+        raise Exception(f"SQL Error: {str(e)}\nSQL: {sql}")
 
 
 # ============================================
-# 2) DSPy SIGNATURE: Intent + SQL
+# 3) DSPy SIGNATURES & MODULES
 # ============================================
 
 class IntentAndSQL(dspy.Signature):
@@ -137,60 +141,35 @@ class IntentAndSQL(dspy.Signature):
     YOU MUST OBEY THESE RULES STRICTLY:
 
     1) Allowed tables and columns (use ONLY these, nothing else):
-
        fact_registration(date_key, branch_id, product_id, reg_count)
        fact_contract(date_key, branch_id, product_id, contract_count)
        fact_inventory_snapshot(date_key, branch_id, product_id, stock_qty)
-
        dim_date(date_key, date, year, month, day)
        dim_product(product_id, model_name, generation, storage_gb, color, list_price)
        dim_branch(branch_id, branch_code, branch_name, region)
 
     2) You MUST NOT invent any new tables or columns.
-       For example, NEVER use: fact_sales, dim_model, dim_store, model_key, quantity, etc.
-
-    3) Joins:
-       fact_*.date_key   = dim_date.date_key
-       fact_*.branch_id  = dim_branch.branch_id
-       fact_*.product_id = dim_product.product_id
-
-    4) Dates:
-       - date_key is INT in YYYYMMDD (e.g. 20251111).
-       - "เดือน X ปี Y"  => filter using dim_date.year = Y AND dim_date.month = X.
-       - If year is not mentioned, assume the latest year in the data.
-
+    3) Joins must use correct keys.
+    4) Dates: date_key is INT in YYYYMMDD.
     5) Revenue vs Units:
-       - If the question talks about "ยอดขายเป็นเงิน", "บาท", "revenue", "sales amount":
-         * Define revenue as: SUM(c.contract_count * p.list_price)
-         * Always JOIN dim_product p and use p.list_price.
-         * Name the column something like total_revenue or current_revenue.
-       - If the question talks about "จำนวนเครื่อง" or "ยอดขายกี่เครื่อง":
-         * Use SUM(c.contract_count) and name it total_units or similar.
-
-    Your job:
-       - Understand the question.
-       - Propose a short intent name.
-       - Generate a VALID DuckDB SQL that respects ALL rules above.
-       - Briefly explain what the SQL does.
+       - Revenue: SUM(contract_count * list_price)
+       - Units: SUM(contract_count)
     """
-
-    question: str = InputField(desc="Top-management analytics question in Thai or English")
-    intent: str = OutputField(desc="Short intent name for the question, e.g. best_branch_mtd")
-    sql: str = OutputField(desc="Valid DuckDB SQL over the given schema and rules")
-    comment: str = OutputField(desc="Short English explanation of what the SQL does")
-
+    question: str = InputField(desc="Top-management analytics question")
+    intent: str = OutputField(desc="Short intent name")
+    sql: str = OutputField(desc="Valid DuckDB SQL")
+    comment: str = OutputField(desc="Short explanation")
 
 class SQLPlanner(dspy.Module):
     def __init__(self):
         super().__init__()
         self.predict = dspy.ChainOfThought(IntentAndSQL)
-
     def forward(self, question: str):
         return self.predict(question=question)
 
 
 # ============================================
-# 3) TRAINSET (9 EXAMPLES) + TELEPROMPTER
+# 4) TRAINSET (FULL 9 EXAMPLES - NO CUTS)
 # ============================================
 
 # 1) Best-selling iPhone generation in Nov (MTD)
@@ -425,80 +404,79 @@ ex9 = dspy.Example(
 trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9]
 
 
-def dummy_metric(example, prediction, trace=None):
-    # ยังไม่ได้ใช้ metric จริง ตอนนี้แค่ให้ teleprompter ทำ few-shot rewrite
-    return 0.0
-
-
-teleprompter = BootstrapFewShot(metric=dummy_metric)
+teleprompter = BootstrapFewShot(metric=lambda x, y, trace=None: 0.0)
 optimized_planner = teleprompter.compile(SQLPlanner(), trainset=trainset)
 
 # ============================================
-# 4) INSIGHT LAYER
+# 5) INSIGHT LAYER
 # ============================================
 
 class InsightFromResult(dspy.Signature):
     """
     Turn a SQL result table into management insight and actions in Thai (B1 level).
-
-    Guideline:
-    - kpi_summary: bullet สั้นๆ สรุปตัวเลขสำคัญ
-        * ถ้าคอลัมน์ชื่อมีคำว่า "revenue", "amount", "baht", "บาท" ให้ใช้หน่วย "บาท"
-        * ถ้าเป็นจำนวนเครื่อง เช่น contract_count, total_units ให้ใช้คำว่า "เครื่อง" หลีกเลี่ยงใช้ "บาท"
-    - explanation: อธิบายความหมายของตัวเลขต่อธุรกิจ (Demand–Sales–Stock หรือ Revenue)
-    - action: แนะนำ 1–3 ข้อควรทำต่อ (ปรับสต็อก, โปรโมชัน, โฟกัสสาขา ฯลฯ)
     """
-
     question: str = InputField(desc="Original management question in Thai or English")
     table_view: str = InputField(desc="SQL result as a small markdown table")
-
     kpi_summary: str = OutputField(desc="Short bullet list of key KPIs in Thai (B1)")
     explanation: str = OutputField(desc="Insight explanation in Thai (B1)")
     action: str = OutputField(desc="1–3 recommended actions in Thai (B1)")
 
-
 insight_predictor = dspy.Predict(InsightFromResult)
-
-
 def generate_insight(question: str, table_view: str):
     return insight_predictor(question=question, table_view=table_view)
 
 
 # ============================================
-# 5) MAIN ENTRY FOR APP: ask_bot_core
+# 6) MAIN ENTRY FOR APP (CRASH PROOF)
 # ============================================
 
 def ask_bot_core(question: str) -> dict:
-    """
-    ฟังก์ชัน core สำหรับใช้ใน Streamlit / API:
-    - รับคำถามผู้บริหาร (ภาษาไทย/อังกฤษ)
-    - ใช้ optimized_planner สร้าง SQL
-    - รัน SQL กับ DuckDB
-    - แปลงผลลัพธ์เป็น KPI + Explanation + Action
-    - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
-    """
-    
-    # 🔥 Fix: ต้อง re-configure ทุกครั้งใน Main function เพื่อแก้ปัญหา Streamlit threading
+    # 1. ย้ำ Config (แก้ปัญหา Streamlit Thread)
     dspy.configure(lm=GLOBAL_LM)
 
-    plan = optimized_planner(question)
+    # 2. Plan SQL (ใส่ Try Catch ป้องกัน Error NoneType/JSON)
+    try:
+        plan = optimized_planner(question)
+    except Exception as e:
+        error_msg = str(e)
+        # กรณี API ส่งค่าว่างกลับมา (ที่ทำให้เกิด JSON Error)
+        return {
+            "question": question, "intent": "error", "sql": "", "table_view": "",
+            "kpi_summary": "Connection Error", 
+            "explanation": f"ระบบ AI ขัดข้องชั่วคราว: {error_msg}",
+            "action": "กรุณาลองกดถามใหม่อีกครั้ง"
+        }
+
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
-    df, table_view = run_sql(sql)
-
-    if df.empty:
-        return {
-            "question": question,
-            "intent": getattr(plan, "intent", ""),
-            "sql": sql,
-            "table_view": table_view,
-            "kpi_summary": "",
-            "explanation": "ไม่มีข้อมูลในช่วง / เงื่อนไขนี้",
-            "action": "ลองปรับคำถาม หรือช่วงวันที่ใหม่อีกครั้ง",
+    # 3. Run SQL
+    try:
+        df, table_view = run_sql(sql)
+    except Exception as e:
+         return {
+            "question": question, "intent": getattr(plan, "intent", "sql_error"), "sql": sql,
+            "table_view": "Error", "kpi_summary": "SQL Error", 
+            "explanation": f"SQL ผิดพลาด: {str(e)}", "action": "ลองถามใหม่ด้วยคำพูดที่ชัดเจนขึ้น"
         }
 
-    ins = generate_insight(question=question, table_view=table_view)
+    # 4. Handle Empty
+    if df.empty:
+        return {
+            "question": question, "intent": getattr(plan, "intent", ""), "sql": sql, "table_view": table_view,
+            "kpi_summary": "", "explanation": "ไม่พบข้อมูลในเงื่อนไขนี้", "action": "ลองปรับช่วงเวลาหรือเงื่อนไข"
+        }
+
+    # 5. Insight
+    try:
+        ins = generate_insight(question=question, table_view=table_view)
+    except Exception:
+        # Fallback Insight
+        class Dummy:
+             kpi_summary="สรุปข้อมูลตามตาราง"
+             explanation="แสดงข้อมูลตามที่ร้องขอ"
+             action="-"
+        ins = Dummy()
 
     return {
         "question": question,
