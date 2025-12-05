@@ -33,6 +33,27 @@ dspy.settings.configure(
 
 DB_PATH = "iphone_gold.duckdb"
 
+# Initialize database from CSV files if needed
+def ensure_database_exists():
+    """Ensure DuckDB database exists, create from CSV if needed"""
+    if not os.path.exists(DB_PATH):
+        print("📦 Database not found. Creating from CSV files...")
+        from init_db import init_database
+        init_database(DB_PATH)
+    else:
+        # Verify database is readable
+        try:
+            con = duckdb.connect(DB_PATH, read_only=True)
+            con.execute("SELECT 1").fetchone()
+            con.close()
+        except Exception as e:
+            print(f"⚠️ Database corrupted: {e}. Recreating...")
+            os.remove(DB_PATH)
+            from init_db import init_database
+            init_database(DB_PATH)
+
+ensure_database_exists()
+
 
 # ============================================
 # 1) HELPER: CLEAN SQL + RUN SQL
