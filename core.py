@@ -47,7 +47,7 @@ def ensure_lm_configured():
         @st.cache_resource(show_spinner=False)
         def _configure_lm_once():
             """Configure LM exactly once - cached forever"""
-            lm = dspy.LM("gemini/gemini-2.0-flash")
+            lm = dspy.LM("gemini/gemini-2.5-flash-lite")
             dspy.configure(lm=lm)
             return True  # Just return a flag
         
@@ -59,7 +59,7 @@ def ensure_lm_configured():
         
     except ImportError:
         # Not running in Streamlit
-        lm = dspy.LM("gemini/gemini-2.0-flash")
+        lm = dspy.LM("gemini/gemini-2.5-flash-lite")
         dspy.configure(lm=lm)
 
 
