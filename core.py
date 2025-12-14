@@ -60,8 +60,8 @@ def ensure_lm_configured():
                 try:
                     lm = dspy.LM(
                         "gemini/gemini-2.5-flash",
-                        max_tokens=2000,  # Increased for complex SQL
-                        temperature=0.1,   # Lower temperature for more consistent output
+                        max_tokens=4000,      # Increased from 2000 to handle very complex SQL
+                        temperature=0.1,      # Lower temperature for more consistent output
                         top_p=0.95
                     )
                     dspy.configure(lm=lm)
@@ -97,7 +97,7 @@ def ensure_lm_configured():
         # Not running in Streamlit
         lm = dspy.LM(
             "gemini/gemini-2.5-flash",
-            max_tokens=2000,
+            max_tokens=4000,  # Increased for complex SQL
             temperature=0.1,
             top_p=0.95
         )
