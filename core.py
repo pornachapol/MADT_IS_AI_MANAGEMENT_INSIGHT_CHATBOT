@@ -137,10 +137,11 @@ class IntentAndSQL(dspy.Signature):
       fact_inventory_snapshot(date_key, branch_id, product_id, stock_qty)
       dim_date(date_key, date, year, month, day)
       dim_product(product_id, model_name, generation, storage_gb, color, base_price)
-      dim_branch(branch_id, branch_code, branch_name, region)
+      dim_branch(branch_id, branch_code, branch_name, branch_type, province, is_active)
 
     - วันที่: date_key = INT YYYYMMDD
     - Revenue = SUM(c.contract_count * p.base_price) ถ้าถามยอดขายเป็นเงิน
+    - ใช้ province ไม่ใช่ region สำหรับ dim_branch
     """
     question: str = InputField()
     intent: str = OutputField()
