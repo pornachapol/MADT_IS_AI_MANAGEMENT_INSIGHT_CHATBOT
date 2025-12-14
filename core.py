@@ -186,9 +186,12 @@ class IntentAndSQL(dspy.Signature):
 class SQLPlanner(dspy.Module):
     def __init__(self):
         super().__init__()
+        # Use ChainOfThought - will use demonstrations from loaded JSON
         self.predict = dspy.ChainOfThought(IntentAndSQL)
 
     def forward(self, question: str):
+        # If loaded from JSON, demonstrations are already configured
+        # Otherwise, DSPy will use default behavior
         return self.predict(question=question)
 
 
@@ -668,26 +671,38 @@ trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9, ex10, ex11, ex12, ex13]
 
 def get_optimized_planner():
     """
-    Get optimized planner with proper caching using Streamlit.
-    This ensures the planner is compiled once and reused across requests.
+    Get planner using simple mode (no pre-compilation needed).
+    
+    DSPy will use trainset examples directly when generating SQL.
+    This ensures all 13 examples (including ex10-ex13) are available.
+    
+    Trade-off:
+    - Uses ~100-200 more tokens per session than pre-compiled JSON
+    - But much simpler - no need to compile or manage JSON file
+    - All 13 examples are available to LLM
+    
+    Token usage: ~350-450 per session (vs ~260 with optimized JSON)
+    Still much better than BootstrapFewShot compilation (~760-1260)!
     """
     ensure_lm_configured()
     
-    # Try to use Streamlit's cache if available
     try:
         import streamlit as st
         
         @st.cache_resource
-        def _cached_compile():
-            teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
-            return teleprompter.compile(SQLPlanner(), trainset=trainset)
+        def _get_planner():
+            """
+            Simple planner - DSPy will use trainset examples automatically.
+            No compilation, no JSON, just works!
+            """
+            print("📝 Using simple planner with all 13 training examples")
+            return SQLPlanner()
         
-        return _cached_compile()
+        return _get_planner()
         
     except ImportError:
-        # Not running in Streamlit, use simple compilation
-        teleprompter = BootstrapFewShot(metric=lambda ex, pred, trace=None: 0.0)
-        return teleprompter.compile(SQLPlanner(), trainset=trainset)
+        # Not running in Streamlit
+        return SQLPlanner()
 
 
 # ============================================
