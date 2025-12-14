@@ -71,29 +71,57 @@ if st.button("🔍 วิเคราะห์เลย", type="primary") and qu
         except AssertionError as e:
             error_msg = str(e)
             if "No LM is loaded" in error_msg or "can only be changed by the thread" in error_msg:
+                # Clear cache automatically to allow retry
+                st.cache_resource.clear()
+                
                 st.error("⚠️ **DSPy Configuration Error**")
-                st.warning("กรุณา **Refresh หน้าเว็บ (F5)** แล้วลองอีกครั้ง")
+                st.warning("🔄 **Cache cleared automatically!** กรุณา **Refresh หน้าเว็บ (F5)** แล้วลองอีกครั้ง")
                 with st.expander("🔍 Technical Details"):
                     st.code(f"Error: {error_msg}")
                     st.markdown("""
-                    **สาเหตุ:** DSPy thread-local storage issue
+                    **สาเหตุ:** LM configuration failed (อาจเกิดจาก rate limit ก่อนหน้า)
                     
                     **วิธีแก้:**
-                    1. **Refresh หน้าเว็บ (กด F5)** ← แนะนำ
-                    2. ปิด tab แล้วเปิดใหม่
-                    3. หรือ Reboot app ใน Streamlit Cloud
+                    1. **Cache ถูก clear อัตโนมัติแล้ว**
+                    2. **Refresh หน้าเว็บ (กด F5)** ← สำคัญ!
+                    3. รอ 1-2 นาที ถ้าเจอ rate limit
+                    4. ลองถามคำถามอีกครั้ง
                     
-                    **หมายเหตุ:** ปัญหานี้เกิดจาก DSPy library ไม่รองรับ
-                    การ reconfigure ใน thread เดียวกัน
+                    **หมายเหตุ:** ปัญหานี้มักเกิดหลังจาก API rate limit
                     """)
             else:
                 raise
-                
+        
         except Exception as e:
-            st.error(f"⚠️ **An error occurred:**\n\n{str(e)}")
-            with st.expander("🔍 Debug Information"):
-                import traceback
-                st.code(traceback.format_exc())
+            error_msg = str(e)
+            
+            # Check for rate limit errors
+            if "429" in error_msg or "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+                st.error("⚠️ **API Rate Limit Error**")
+                st.warning("Gemini API มีการใช้งานเกินขอบเขต กรุณารอสักครู่")
+                with st.expander("🔍 รายละเอียด"):
+                    st.markdown(f"""
+                    **Error:** {error_msg}
+                    
+                    **สาเหตุ:**
+                    - Gemini API มี rate limit (15 requests/minute for free tier)
+                    - ใช้งานเยอะเกินไปในช่วงเวลาสั้นๆ
+                    
+                    **วิธีแก้:**
+                    1. **รอ 1-2 นาที** (จริงๆ ต้องรอ!) ⏰
+                    2. Refresh หน้าเว็บ (F5) **ครั้งเดียว**
+                    3. ลองถามคำถามใหม่
+                    
+                    **ป้องกันในอนาคต:**
+                    - อย่าถามคำถามติดกันเร็วเกินไป
+                    - รอให้ระบบตอบเสร็จก่อนถามใหม่ (~10 วินาที)
+                    - พิจารณาอัพเกรด Gemini API tier
+                    """)
+            else:
+                st.error(f"⚠️ **An error occurred:**\n\n{str(e)}")
+                with st.expander("🔍 Debug Information"):
+                    import traceback
+                    st.code(traceback.format_exc())
 
 else:
     st.info("ลองพิมพ์คำถามด้านบน แล้วกดปุ่ม 🔍 วิเคราะห์เลย")
