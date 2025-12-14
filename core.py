@@ -60,8 +60,9 @@ def ensure_lm_configured():
                 try:
                     lm = dspy.LM(
                         "gemini/gemini-2.5-flash",
-                        max_tokens=1000,
-                        temperature=0.7
+                        max_tokens=2000,  # Increased for complex SQL
+                        temperature=0.1,   # Lower temperature for more consistent output
+                        top_p=0.95
                     )
                     dspy.configure(lm=lm)
                     
@@ -94,7 +95,12 @@ def ensure_lm_configured():
         
     except ImportError:
         # Not running in Streamlit
-        lm = dspy.LM("gemini/gemini-2.5-flash")
+        lm = dspy.LM(
+            "gemini/gemini-2.5-flash",
+            max_tokens=2000,
+            temperature=0.1,
+            top_p=0.95
+        )
         dspy.configure(lm=lm)
 
 
@@ -671,18 +677,15 @@ trainset = [ex1, ex2, ex3, ex4, ex5, ex6, ex7, ex8, ex9, ex10, ex11, ex12, ex13]
 
 def get_optimized_planner():
     """
-    Get planner using simple mode (no pre-compilation needed).
+    Get planner with optimized JSON support (v2.0.9).
     
-    DSPy will use trainset examples directly when generating SQL.
-    This ensures all 13 examples (including ex10-ex13) are available.
+    Priority:
+    1. Try to load from optimized_planner.json (fastest, saves ~100-200 tokens)
+    2. Fallback to simple mode (uses all 13 examples)
     
-    Trade-off:
-    - Uses ~100-200 more tokens per session than pre-compiled JSON
-    - But much simpler - no need to compile or manage JSON file
-    - All 13 examples are available to LLM
-    
-    Token usage: ~350-450 per session (vs ~260 with optimized JSON)
-    Still much better than BootstrapFewShot compilation (~760-1260)!
+    Token usage:
+    - With JSON: ~260 per session ⚡
+    - Without JSON (fallback): ~350-450 per session ✅
     """
     ensure_lm_configured()
     
@@ -690,18 +693,40 @@ def get_optimized_planner():
         import streamlit as st
         
         @st.cache_resource
-        def _get_planner():
-            """
-            Simple planner - DSPy will use trainset examples automatically.
-            No compilation, no JSON, just works!
-            """
-            print("📝 Using simple planner with all 13 training examples")
+        def _load_or_create_planner():
+            import os
+            json_path = "optimized_planner.json"
+            
+            # Try to load from JSON first
+            if os.path.exists(json_path):
+                try:
+                    planner = SQLPlanner()
+                    planner.load(json_path)
+                    print("✅ Loaded pre-compiled planner from JSON (saves ~100-200 tokens!)")
+                    return planner
+                except Exception as e:
+                    print(f"⚠️ Failed to load JSON: {e}")
+                    print("📝 Falling back to simple mode")
+            
+            # Fallback: Simple mode with all 13 examples
+            print("📝 Using simple mode with all 13 training examples")
             return SQLPlanner()
         
-        return _get_planner()
+        return _load_or_create_planner()
         
     except ImportError:
         # Not running in Streamlit
+        import os
+        json_path = "optimized_planner.json"
+        
+        if os.path.exists(json_path):
+            try:
+                planner = SQLPlanner()
+                planner.load(json_path)
+                return planner
+            except:
+                pass
+        
         return SQLPlanner()
 
 
@@ -737,7 +762,7 @@ def ask_bot_core(question: str) -> dict:
     """
     ฟังก์ชัน core สำหรับใช้ใน Streamlit / API:
     - รับคำถามผู้บริหาร (ภาษาไทย/อังกฤษ)
-    - ใช้ optimized_planner สร้าง SQL
+    - ใช้ planner สร้าง SQL (with retry for incomplete responses)
     - รัน SQL กับ DuckDB
     - แปลงผลลัพธ์เป็น KPI + Explanation + Action
     - คืนเป็น dict อย่างเดียว (ไม่ print อะไร)
@@ -746,11 +771,47 @@ def ask_bot_core(question: str) -> dict:
     # Ensure LM is configured
     ensure_lm_configured()
     
-    # Get the optimized planner (lazy init)
+    # Get the planner
     planner = get_optimized_planner()
 
-    # 1) ให้ DSPy วางแผน Intent + SQL
-    plan = planner(question)
+    # 1) ให้ DSPy วางแผน Intent + SQL with retry
+    max_retries = 3
+    plan = None
+    last_error = None
+    
+    for attempt in range(max_retries):
+        try:
+            plan = planner(question)
+            
+            # Validate that we got all required fields
+            if not hasattr(plan, 'sql') or not plan.sql:
+                raise ValueError("LLM response missing 'sql' field")
+            if not hasattr(plan, 'intent') or not plan.intent:
+                # Intent is optional, set default
+                plan.intent = "unknown"
+            
+            # If we got here, response is valid
+            break
+            
+        except Exception as e:
+            last_error = e
+            error_msg = str(e)
+            
+            # Check if it's a parse error
+            if "JSONAdapter failed to parse" in error_msg or "missing" in error_msg.lower():
+                if attempt < max_retries - 1:
+                    print(f"LLM response incomplete, retrying... (attempt {attempt + 1}/{max_retries})")
+                    import time
+                    time.sleep(1)  # Brief pause before retry
+                    continue
+            
+            # For other errors, raise immediately
+            raise
+    
+    # If all retries failed
+    if plan is None:
+        raise Exception(f"Failed to get valid response from LLM after {max_retries} attempts. Last error: {last_error}")
+    
     raw_sql = plan.sql
     sql = clean_sql(raw_sql)
 
