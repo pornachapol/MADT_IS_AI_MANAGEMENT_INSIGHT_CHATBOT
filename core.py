@@ -505,9 +505,9 @@ ex11 = dspy.Example(
             avg_daily_demand,
             current_stock,
             days_of_stock,
-            conversion_rate AS cvr_pct,
-            recommended_restock AS restock_qty,
-            potential_revenue AS potential_revenue_baht
+            conversion_rate,
+            recommended_restock,
+            potential_revenue
         FROM restock_priority
         WHERE stock_status IN ('STOCKOUT', 'CRITICAL', 'LOW')
         ORDER BY 
