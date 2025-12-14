@@ -43,19 +43,54 @@ def ensure_lm_configured():
     
     try:
         import streamlit as st
+        import time
         
         @st.cache_resource(show_spinner=False)
         def _configure_lm_once():
-            """Configure LM exactly once - cached forever"""
-            lm = dspy.LM("gemini/gemini-2.5-flash")
-            dspy.configure(lm=lm)
-            return True  # Just return a flag
+            """
+            Configure LM exactly once - cached forever.
+            If this fails, Streamlit will NOT cache the failure,
+            so it will retry on next run.
+            """
+            max_retries = 3
+            retry_delay = 2
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    lm = dspy.LM(
+                        "gemini/gemini-2.5-flash",
+                        max_tokens=1000,
+                        temperature=0.7
+                    )
+                    dspy.configure(lm=lm)
+                    
+                    # Only return True if successful
+                    # This tells Streamlit to cache this result
+                    return True
+                    
+                except Exception as e:
+                    last_error = e
+                    error_msg = str(e)
+                    
+                    # Check if it's a rate limit error
+                    if "429" in error_msg or "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+                        if attempt < max_retries - 1:
+                            wait_time = retry_delay * (2 ** attempt)  # 2, 4, 8 seconds
+                            print(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(wait_time)
+                            continue
+                    
+                    # For other errors, raise immediately
+                    raise
+            
+            # If all retries failed due to rate limit, raise the last error
+            # This ensures Streamlit does NOT cache the failure
+            raise last_error
         
-        # This will only run once and be cached
+        # This will only run once and be cached IF SUCCESSFUL
+        # If it raises an exception, cache is NOT stored
         _configure_lm_once()
-        
-        # DO NOT call dspy.configure() again!
-        # The cache ensures it was already called once
         
     except ImportError:
         # Not running in Streamlit
